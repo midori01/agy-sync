@@ -57,6 +57,9 @@ func main() {
 		os.Exit(ssh.CmdIsPeer(args[1]))
 	}
 
+	config.EnsureTermuxEnvironment()
+	cluster.ReconcileRegistry()
+
 	if len(args) == 0 {
 		// Sync with default peer
 		defAlias, defSSH, defPort := cluster.LoadDefaultTarget()
@@ -80,19 +83,19 @@ func main() {
 	case "version", "-v", "--version":
 		fmt.Printf("Antigravity Cross-Device Synchronizer (agy-sync v%s)\n", config.Version)
 		return
-	case "devices", "nodes":
+	case "devices", "nodes", "list-devices":
 		verbose := false
 		for _, a := range args[1:] {
-			if a == "-v" || a == "--verbose" {
+			if a == "-v" || a == "-V" || a == "--verbose" {
 				verbose = true
 			}
 		}
 		display.ShowDevices(verbose)
 		return
-	case "items", "manifest":
+	case "items", "manifest", "list", "list-items":
 		display.ShowItems()
 		return
-	case "ssh":
+	case "ssh", "connect":
 		ssh.HandleSSHCommand(args[1:])
 		return
 	case "probe-lan":
@@ -117,7 +120,7 @@ func main() {
 		}
 		sync.PushSettingsToPeers(target)
 		return
-	case "all":
+	case "all", "--all":
 		verbose := false
 		for _, a := range args[1:] {
 			if a == "-V" || a == "--verbose" {
@@ -142,12 +145,25 @@ func main() {
 			cluster.RenameAlias(oldTarget, newAlias, true)
 		}
 		return
-	case "unalias":
+	case "unalias", "reset-alias":
 		if len(args) < 2 {
 			fmt.Println("Usage: agy-sync unalias <alias>")
 			os.Exit(1)
 		}
 		cluster.ResetAlias(args[1], true)
+		return
+	case "self", "set-self":
+		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
+			cluster.ResetAlias("self", true)
+		} else {
+			ok, msg := cluster.SetLocalName(args[1])
+			if ok {
+				fmt.Printf("[✅] %s\n", msg)
+			} else {
+				fmt.Printf("[❌] %s\n", msg)
+				os.Exit(1)
+			}
+		}
 		return
 	case "enroll", "deploy":
 		sync.CmdEnroll(args[1:])
@@ -156,11 +172,11 @@ func main() {
 		sync.CmdPair(args[1:])
 		return
 	case "device":
-		if len(args) < 2 {
-			fmt.Println("Usage: agy-sync device <add|remove|default> [args...]")
-			os.Exit(1)
+		if len(args) < 2 || strings.EqualFold(args[1], "list") || strings.EqualFold(args[1], "show") {
+			display.ShowDevices(false)
+			return
 		}
-		subCmd := args[1]
+		subCmd := strings.ToLower(args[1])
 		switch subCmd {
 		case "add":
 			if len(args) < 4 {
@@ -172,7 +188,7 @@ func main() {
 			_, host, port, _ := config.ParseEndpoint(ep, 8022)
 			cluster.SaveDevice(al, host, port)
 			fmt.Printf("[✅] Registered device '%s' -> %s:%d\n", al, host, port)
-		case "remove", "rm", "delete":
+		case "remove", "rm", "del", "delete":
 			if len(args) < 3 {
 				fmt.Println("Usage: agy-sync device remove <alias>")
 				os.Exit(1)
@@ -184,7 +200,7 @@ func main() {
 				fmt.Printf("[❌] %s\n", msg)
 				os.Exit(1)
 			}
-		case "default":
+		case "default", "set-default":
 			if len(args) < 3 {
 				fmt.Println("Usage: agy-sync device default <alias>")
 				os.Exit(1)
@@ -196,12 +212,45 @@ func main() {
 				fmt.Printf("[❌] %s\n", msg)
 				os.Exit(1)
 			}
+		case "alias", "rename":
+			if len(args) < 3 {
+				fmt.Println("Usage: agy-sync device alias <old_alias> [new_alias]")
+				os.Exit(1)
+			}
+			target := args[2]
+			newAlias := ""
+			if len(args) >= 4 {
+				newAlias = args[3]
+			}
+			if newAlias == "" {
+				cluster.ResetAlias(target, true)
+			} else {
+				cluster.RenameAlias(target, newAlias, true)
+			}
+		case "unalias", "reset-alias":
+			if len(args) < 3 {
+				fmt.Println("Usage: agy-sync device unalias <alias>")
+				os.Exit(1)
+			}
+			cluster.ResetAlias(args[2], true)
+		case "self", "set-self", "local", "set-local":
+			if len(args) < 3 || strings.TrimSpace(args[2]) == "" {
+				cluster.ResetAlias("self", true)
+			} else {
+				ok, msg := cluster.SetLocalName(args[2])
+				if ok {
+					fmt.Printf("[✅] %s\n", msg)
+				} else {
+					fmt.Printf("[❌] %s\n", msg)
+					os.Exit(1)
+				}
+			}
 		default:
-			fmt.Printf("[❌] Unknown device action '%s'. Use add, remove, or default.\n", subCmd)
+			fmt.Printf("[❌] Unknown device action '%s'. Use add, remove, default, alias, or list.\n", subCmd)
 			os.Exit(1)
 		}
 		return
-	case "keepalive":
+	case "keepalive", "daemon", "ping":
 		action := "start"
 		if len(args) >= 2 {
 			action = args[1]
@@ -213,15 +262,44 @@ func main() {
 		fmt.Println("[✅] Registry, SSH configuration, and shell integration refreshed.")
 		return
 	default:
-		// Target peer or endpoint sync
+		// Target peer or ad-hoc endpoint sync
 		verbose := false
+		saveTarget := false
+		customPort := 0
 		var cleanArgs []string
-		for _, a := range args {
+
+		i := 0
+		for i < len(args) {
+			a := args[i]
 			if a == "-V" || a == "--verbose" {
 				verbose = true
+				i++
+			} else if a == "--save" {
+				saveTarget = true
+				i++
+			} else if (a == "-p" || a == "--port") && i+1 < len(args) {
+				if p, err := strconv.Atoi(args[i+1]); err == nil {
+					customPort = p
+				}
+				i += 2
 			} else {
 				cleanArgs = append(cleanArgs, a)
+				i++
 			}
+		}
+
+		if len(cleanArgs) == 0 {
+			defAlias, defSSH, defPort := cluster.LoadDefaultTarget()
+			if defAlias == "" && defSSH == "" {
+				fmt.Println("[❌] No default target configured. Set one with: agy-sync device default <alias>")
+				os.Exit(1)
+			}
+			targetHost := defSSH
+			if targetHost == "" {
+				targetHost = defAlias
+			}
+			sync.SyncWithPeer(targetHost, defPort, defAlias, verbose, false, nil, nil)
+			return
 		}
 
 		target := cleanArgs[0]
@@ -233,16 +311,31 @@ func main() {
 			}
 			_, host, port, targetSSH := config.ParseEndpoint(ep, 8022)
 			_ = host
+			if customPort > 0 {
+				port = customPort
+			}
+			if saveTarget {
+				cluster.SaveDefaultTarget(targetSSH, port, matchedAlias)
+				fmt.Printf("[✅] Saved default target: %s:%d\n", targetSSH, port)
+			}
 			sync.SyncWithPeer(targetSSH, port, matchedAlias, verbose, false, nil, nil)
 			return
 		}
 
-		// Ad-hoc host:port
-		if strings.Contains(target, ":") {
-			_, host, port, targetSSH := config.ParseEndpoint(target, 8022)
-			if config.IsLocalTarget(target, port, config.GetLocalEndpoint(), config.GetLocalDeviceName()) {
-				fmt.Printf("[⚠️] Cannot sync with local target '%s'.\n", target)
+		// Ad-hoc host or host:port
+		defaultPort := 8022
+		if customPort > 0 {
+			defaultPort = customPort
+		}
+		_, host, port, targetSSH := config.ParseEndpoint(target, defaultPort)
+		if host != "" {
+			if config.IsLocalTarget(targetSSH, port, config.GetLocalEndpoint(), config.GetLocalDeviceName()) {
+				fmt.Printf("[⚠️] Target '%s:%d' is this local device. Cannot sync a device with itself.\n", targetSSH, port)
 				os.Exit(1)
+			}
+			if saveTarget {
+				cluster.SaveDefaultTarget(targetSSH, port, "")
+				fmt.Printf("[✅] Saved default target: %s:%d\n", targetSSH, port)
 			}
 			sync.SyncWithPeer(targetSSH, port, host, verbose, false, nil, nil)
 			return

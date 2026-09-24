@@ -630,3 +630,26 @@ func GetTailscaleIPs() []string {
 	return ips
 }
 
+func EnsureTermuxEnvironment() {
+	if _, err := os.Stat("/data/data/com.termux"); err == nil {
+		if path, err := exec.LookPath("termux-wake-lock"); err == nil {
+			_ = exec.Command(path).Start()
+		}
+		if path, err := exec.LookPath("sshd"); err == nil {
+			running := false
+			if pgrep, err := exec.LookPath("pgrep"); err == nil {
+				if out, err := exec.Command(pgrep, "-x", "sshd").Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+					running = true
+				}
+			} else if pidof, err := exec.LookPath("pidof"); err == nil {
+				if out, err := exec.Command(pidof, "sshd").Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+					running = true
+				}
+			}
+			if !running {
+				_ = exec.Command(path).Start()
+			}
+		}
+	}
+}
+

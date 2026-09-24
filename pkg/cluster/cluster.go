@@ -356,6 +356,19 @@ func SetDefaultDevice(name string) (bool, string) {
 	return true, fmt.Sprintf("Default sync target set to '%s' (%s:%d).", chosenAlias, targetSSH, port)
 }
 
+func SaveDefaultTarget(host string, port int, alias string) {
+	cfg := config.LoadConfig()
+	if _, ok := cfg["sync"]; !ok {
+		cfg["sync"] = make(map[string]string)
+	}
+	cfg["sync"]["target"] = host
+	cfg["sync"]["port"] = strconv.Itoa(port)
+	if alias != "" {
+		cfg["sync"]["default"] = strings.ToLower(alias)
+	}
+	_ = config.SaveConfig(cfg)
+}
+
 func LoadDefaultTarget() (alias string, targetSSH string, port int) {
 	cfg := config.LoadConfig()
 	devices := LoadDevices()
