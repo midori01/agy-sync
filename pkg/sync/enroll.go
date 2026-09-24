@@ -283,34 +283,11 @@ cat ~/.ssh/id_ed25519.pub
 		fmt.Println("[✅] Full-mesh SSH mutual trust established across cluster.")
 	}
 
-	// 7. Deploy agy-sync Engine & Multi-Arch Binaries
+	// 7. Deploy agy-sync Synchronizer Engine
 	fmt.Println("[⚡] Deploying agy-sync synchronizer engine...")
-	isRemTermux := false
-	if _, _, code, _ := ssh.RunSSHCmd(sshTarget, port, "[ -d /data/data/com.termux ]", false); code == 0 {
-		isRemTermux = true
-	}
-
-	binDir := filepath.Dir(config.AgySyncScript)
-	var targetBinaryData []byte
-	archLower := strings.ToLower(arch)
-	if isRemTermux {
-		if data, err := os.ReadFile(filepath.Join(binDir, "agy-sync-android-arm64")); err == nil {
-			targetBinaryData = data
-		} else {
-			targetBinaryData, _ = os.ReadFile(config.AgySyncScript)
-		}
-	} else if strings.Contains(archLower, "x86_64") || strings.Contains(archLower, "amd64") {
-		if data, err := os.ReadFile(filepath.Join(binDir, "agy-sync-linux-amd64")); err == nil {
-			targetBinaryData = data
-		} else {
-			targetBinaryData, _ = os.ReadFile(config.AgySyncScript)
-		}
-	} else {
-		if data, err := os.ReadFile(filepath.Join(binDir, "agy-sync-linux-arm64")); err == nil {
-			targetBinaryData = data
-		} else {
-			targetBinaryData, _ = os.ReadFile(config.AgySyncScript)
-		}
+	targetBinaryData, err := GetOrBuildTargetBinary(arch)
+	if err != nil || len(targetBinaryData) == 0 {
+		targetBinaryData, _ = os.ReadFile(config.AgySyncScript)
 	}
 
 	deployEngineCmd := `
@@ -329,8 +306,6 @@ fi
 	procEngine := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, deployEngineCmd, true)...)
 	procEngine.Stdin = bytes.NewReader(targetBinaryData)
 	_ = procEngine.Run()
-
-	EnsureCompanionBinaries(sshTarget, port, binDir, fmt.Sprintf("%s/.gemini/antigravity-cli/bin", remHome))
 
 	// 8. Deploy agy-sync-go source & agy-pool Multi-Account Engine
 	if _, err := os.Stat(config.AgySyncGoDir); err == nil {
@@ -514,11 +489,8 @@ chmod 600 ~/.ssh/authorized_keys
 
 echo "$RESP" | grep "^DEVICES_JSON_B64:" | cut -d: -f2 | base64 -d > ~/.gemini/devices.json
 
-curl -fsSL "http://%s:%d/bin/agy-sync?arch=${ARCH}&termux=${IS_TERMUX}" -o ~/.gemini/antigravity-cli/bin/agy-sync
-curl -fsSL "http://%s:%d/bin/companion/agy-sync-android-arm64" -o ~/.gemini/antigravity-cli/bin/agy-sync-android-arm64 2>/dev/null || true
-curl -fsSL "http://%s:%d/bin/companion/agy-sync-linux-arm64" -o ~/.gemini/antigravity-cli/bin/agy-sync-linux-arm64 2>/dev/null || true
-curl -fsSL "http://%s:%d/bin/companion/agy-sync-linux-amd64" -o ~/.gemini/antigravity-cli/bin/agy-sync-linux-amd64 2>/dev/null || true
-chmod 755 ~/.gemini/antigravity-cli/bin/agy-sync*
+curl -fsSL "http://%s:%d/bin/agy-sync?arch=${ARCH}" -o ~/.gemini/antigravity-cli/bin/agy-sync
+chmod 755 ~/.gemini/antigravity-cli/bin/agy-sync
 curl -fsSL "http://%s:%d/done" >/dev/null 2>&1 || true
 
 ln -sf ~/.gemini/antigravity-cli/bin/agy-sync ~/.local/bin/agy-sync 2>/dev/null || true
@@ -529,7 +501,7 @@ elif [ -w /usr/local/bin ]; then
 fi
 
 echo "[🎉] Successfully joined Antigravity cluster!"
-`, localName, host, port, token, host, port, host, port, host, port, host, port, host, port)
+`, localName, host, port, token, host, port, host, port)
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte(script))
 	})
@@ -580,36 +552,12 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 
 	mux.HandleFunc("/bin/agy-sync", func(w http.ResponseWriter, r *http.Request) {
 		qArch := strings.ToLower(r.URL.Query().Get("arch"))
-		qTermux := r.URL.Query().Get("termux")
-		userAgent := strings.ToLower(r.Header.Get("User-Agent"))
-		binDir := filepath.Dir(config.AgySyncScript)
-		var binData []byte
-
-		if qTermux == "1" || strings.Contains(userAgent, "termux") {
-			binData, _ = os.ReadFile(filepath.Join(binDir, "agy-sync-android-arm64"))
-		} else if strings.Contains(qArch, "x86_64") || strings.Contains(qArch, "amd64") {
-			binData, _ = os.ReadFile(filepath.Join(binDir, "agy-sync-linux-amd64"))
-		} else {
-			binData, _ = os.ReadFile(filepath.Join(binDir, "agy-sync-linux-arm64"))
-		}
-		if len(binData) == 0 {
+		binData, err := GetOrBuildTargetBinary(qArch)
+		if err != nil || len(binData) == 0 {
 			binData, _ = os.ReadFile(config.AgySyncScript)
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write(binData)
-	})
-
-	mux.HandleFunc("/bin/companion/", func(w http.ResponseWriter, r *http.Request) {
-		cName := filepath.Base(r.URL.Path)
-		if cName == "agy-sync-android-arm64" || cName == "agy-sync-linux-arm64" || cName == "agy-sync-linux-amd64" {
-			binDir := filepath.Dir(config.AgySyncScript)
-			if data, err := os.ReadFile(filepath.Join(binDir, cName)); err == nil {
-				w.Header().Set("Content-Type", "application/octet-stream")
-				_, _ = w.Write(data)
-				return
-			}
-		}
-		http.NotFound(w, r)
 	})
 
 	mux.HandleFunc("/done", func(w http.ResponseWriter, r *http.Request) {

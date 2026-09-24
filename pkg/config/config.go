@@ -43,8 +43,12 @@ var (
 	SocketDir           string
 )
 
+var (
+	Version   = "7.0"
+	GitCommit = "dev"
+)
+
 const (
-	Version               = "7.0"
 	SSHConfigMarkerStart  = "# >>> agy-sync cluster devices >>>"
 	SSHConfigMarkerEnd    = "# <<< agy-sync cluster devices <<<"
 	ShellPeerMarkerStart  = "# >>> agy-sync ssh peer integration >>>"

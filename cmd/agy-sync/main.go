@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -52,13 +53,17 @@ Alias & Device Management:
 func main() {
 	args := os.Args[1:]
 
-	// Fast-path: is-peer, version, help (sub-millisecond response)
+	// Fast-path: is-peer, version, commit, help (sub-millisecond response)
 	if len(args) >= 2 && args[0] == "is-peer" {
 		os.Exit(ssh.CmdIsPeer(args[1]))
 	}
 	if len(args) == 1 {
+		if args[0] == "--commit" || args[0] == "commit" {
+			fmt.Println(config.GitCommit)
+			return
+		}
 		if args[0] == "-v" || args[0] == "--version" || args[0] == "version" {
-			fmt.Printf("Antigravity Cross-Device Synchronizer (agy-sync v%s)\n", config.Version)
+			fmt.Printf("Antigravity Cross-Device Synchronizer (agy-sync v%s @ %s, %s/%s)\n", config.Version, config.GitCommit, runtime.GOOS, runtime.GOARCH)
 			return
 		}
 		if args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
@@ -91,7 +96,10 @@ func main() {
 		printHelp()
 		return
 	case "version", "-v", "--version":
-		fmt.Printf("Antigravity Cross-Device Synchronizer (agy-sync v%s)\n", config.Version)
+		fmt.Printf("Antigravity Cross-Device Synchronizer (agy-sync v%s @ %s, %s/%s)\n", config.Version, config.GitCommit, runtime.GOOS, runtime.GOARCH)
+		return
+	case "commit", "--commit":
+		fmt.Println(config.GitCommit)
 		return
 	case "devices", "nodes", "list-devices":
 		verbose := false

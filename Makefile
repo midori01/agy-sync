@@ -1,40 +1,25 @@
 BINDIR ?= $(HOME)/.gemini/antigravity-cli/bin
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
+LDFLAGS := -s -w -X agy-sync/pkg/config.GitCommit=$(GIT_COMMIT)
 
-IS_TERMUX := $(shell test -d /data/data/com.termux && echo 1 || echo 0)
-UNAME_M := $(shell uname -m)
+.PHONY: all clean install linux-amd64 linux-arm64
 
-ifeq ($(IS_TERMUX),1)
-HOST_BIN := bin/agy-sync-android-arm64
-else ifeq ($(UNAME_M),x86_64)
-HOST_BIN := bin/agy-sync-linux-amd64
-else
-HOST_BIN := bin/agy-sync-linux-arm64
-endif
-
-.PHONY: all clean android linux-arm64 linux-amd64 install
-
-all: android linux-arm64 linux-amd64
-	cp -f $(HOST_BIN) bin/agy-sync
-
-android:
+all:
 	mkdir -p bin
-	CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o bin/agy-sync-android-arm64 ./cmd/agy-sync
+	CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="$(LDFLAGS)" -o bin/agy-sync ./cmd/agy-sync
 
 linux-arm64:
 	mkdir -p bin
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o bin/agy-sync-linux-arm64 ./cmd/agy-sync
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/agy-sync-linux-arm64 ./cmd/agy-sync
 
 linux-amd64:
 	mkdir -p bin
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/agy-sync-linux-amd64 ./cmd/agy-sync
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/agy-sync-linux-amd64 ./cmd/agy-sync
 
 install: all
 	mkdir -p $(BINDIR)
-	cp -f $(HOST_BIN) $(BINDIR)/agy-sync
-	cp -f bin/agy-sync-android-arm64 $(BINDIR)/agy-sync-android-arm64
-	cp -f bin/agy-sync-linux-arm64 $(BINDIR)/agy-sync-linux-arm64
-	cp -f bin/agy-sync-linux-amd64 $(BINDIR)/agy-sync-linux-amd64
-	chmod 755 $(BINDIR)/agy-sync*
+	cp -f bin/agy-sync $(BINDIR)/agy-sync
+	chmod 755 $(BINDIR)/agy-sync
 
 clean:
 	rm -rf bin/

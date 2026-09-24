@@ -79,7 +79,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 1. Pipeline Handshake
 	stepStatus("Pipeline handshake")
-	handshakeCmd := `echo READY && echo "HOME:$HOME" && echo "USER:$(whoami 2>/dev/null || echo "$USER")" && echo "ARCH:$(uname -m 2>/dev/null || echo unknown)" && echo "TS_IP:$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null || true)" && echo "LAN_IPS:$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis)/ {print $4}' | cut -d/ -f1) | tr '\n' ',')" && (date +%s.%N 2>/dev/null || date +%s)`
+	handshakeCmd := `echo READY && echo "HOME:$HOME" && echo "USER:$(whoami 2>/dev/null || echo "$USER")" && echo "ARCH:$(uname -m 2>/dev/null || echo unknown)" && echo "COMMIT:$(command -v agy-sync >/dev/null 2>&1 && agy-sync --commit 2>/dev/null || echo NONE)" && echo "TS_IP:$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null || true)" && echo "LAN_IPS:$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis)/ {print $4}' | cut -d/ -f1) | tr '\n' ',')" && (date +%s.%N 2>/dev/null || date +%s)`
 
 	connectTo := 8
 	if host != origHost {
@@ -150,6 +150,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	remHome := config.HomeDir
 	remUser := ""
 	remArch := "aarch64"
+	remCommit := ""
 	remTsIP := ""
 	var remLanIPs []string
 	var remoteTS *float64
@@ -165,6 +166,8 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 			remUser = strings.TrimSpace(strings.TrimPrefix(line, "USER:"))
 		} else if strings.HasPrefix(line, "ARCH:") {
 			remArch = strings.TrimSpace(strings.TrimPrefix(line, "ARCH:"))
+		} else if strings.HasPrefix(line, "COMMIT:") {
+			remCommit = strings.TrimSpace(strings.TrimPrefix(line, "COMMIT:"))
 		} else if strings.HasPrefix(line, "TS_IP:") {
 			remTsIP = strings.TrimSpace(strings.TrimPrefix(line, "TS_IP:"))
 		} else if strings.HasPrefix(line, "LAN_IPS:") {
@@ -273,7 +276,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 3.5 Sync Engine
 	stepStatus("Synchronizer engine")
-	binStat := SyncEngine(host, port, remHome, remArch, clockSkew, probeCache)
+	binStat := SyncEngine(host, port, remHome, remArch, remCommit, clockSkew, probeCache)
 	recordAsset("Synchronizer Engine", binStat, "⚡", binStat == "pushed" || binStat == "pulled")
 
 	// 3.6 Sync Token
