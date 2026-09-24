@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -573,3 +574,59 @@ func IsLocalTarget(targetStr string, port int, localEp string, localName string)
 	}
 	return false
 }
+
+func GetLocalLANIPs() []string {
+	var ips []string
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ips
+	}
+	ignoredPrefixes := []string{
+		"lo", "rmnet", "ccmni", "pdp", "dummy", "tun", "tap",
+		"tailscale", "sbt", "sbd", "docker", "virbr", "veth",
+		"wwan", "cellular", "ccinet",
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		ignored := false
+		name := strings.ToLower(iface.Name)
+		for _, pfx := range ignoredPrefixes {
+			if strings.HasPrefix(name, pfx) {
+				ignored = true
+				break
+			}
+		}
+		if ignored {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {
+				ips = append(ips, ipNet.IP.String())
+			}
+		}
+	}
+	return ips
+}
+
+func GetTailscaleIPs() []string {
+	var ips []string
+	if tailscalePath, err := exec.LookPath("tailscale"); err == nil && tailscalePath != "" {
+		if out, err := exec.Command(tailscalePath, "ip", "-4").Output(); err == nil {
+			for _, line := range strings.Split(string(out), "\n") {
+				l := strings.TrimSpace(line)
+				if l != "" && net.ParseIP(l) != nil {
+					ips = append(ips, l)
+				}
+			}
+		}
+	}
+	return ips
+}
+

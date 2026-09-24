@@ -149,6 +149,12 @@ func main() {
 		}
 		cluster.ResetAlias(args[1], true)
 		return
+	case "enroll", "deploy":
+		sync.CmdEnroll(args[1:])
+		return
+	case "pair", "invite":
+		sync.CmdPair(args[1:])
+		return
 	case "device":
 		if len(args) < 2 {
 			fmt.Println("Usage: agy-sync device <add|remove|default> [args...]")
