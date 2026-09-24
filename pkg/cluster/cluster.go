@@ -399,6 +399,38 @@ func LoadDefaultTarget() (alias string, targetSSH string, port int) {
 	return "", "", 8022
 }
 
+func GetClusterTailscaleKey() string {
+	cfg := config.LoadConfig()
+	if cl, ok := cfg["cluster"]; ok {
+		if k := strings.TrimSpace(cl["tailscale_auth_key"]); k != "" {
+			return k
+		}
+	}
+
+	devices := LoadDevices()
+	localEp := config.GetLocalEndpoint()
+	localName := config.GetLocalDeviceName()
+
+	for _, dev := range devices {
+		if !config.IsLocalTarget(dev.TargetSSH, dev.Port, localEp, localName) {
+			out, _, _, err := ssh.RunSSHCmd(dev.TargetSSH, dev.Port, "grep -E '^tailscale_auth_key' ~/.gemini/sync.conf 2>/dev/null", false, 3)
+			if err == nil && strings.Contains(out, "=") {
+				parts := strings.SplitN(out, "=", 2)
+				val := strings.TrimSpace(parts[1])
+				if val != "" {
+					if _, ok := cfg["cluster"]; !ok {
+						cfg["cluster"] = make(map[string]string)
+					}
+					cfg["cluster"]["tailscale_auth_key"] = val
+					_ = config.SaveConfig(cfg)
+					return val
+				}
+			}
+		}
+	}
+	return ""
+}
+
 func BroadcastRegistryToOnlinePeers(showSpinner ...bool) map[string]bool {
 	spin := true
 	if len(showSpinner) > 0 {

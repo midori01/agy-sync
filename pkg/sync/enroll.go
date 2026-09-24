@@ -195,12 +195,10 @@ fi
 	}
 
 	// 4. Tailscale Deployment & Network Join
-	cfg := config.LoadConfig()
 	if tsKey == "" {
-		if cl, ok := cfg["cluster"]; ok {
-			tsKey = cl["tailscale_auth_key"]
-		}
+		tsKey = cluster.GetClusterTailscaleKey()
 	}
+	cfg := config.LoadConfig()
 
 	tsIP := ""
 	if setupTailscale {
