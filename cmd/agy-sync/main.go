@@ -52,9 +52,19 @@ Alias & Device Management:
 func main() {
 	args := os.Args[1:]
 
-	// Fast-path: is-peer (sub-millisecond response)
+	// Fast-path: is-peer, version, help (sub-millisecond response)
 	if len(args) >= 2 && args[0] == "is-peer" {
 		os.Exit(ssh.CmdIsPeer(args[1]))
+	}
+	if len(args) == 1 {
+		if args[0] == "-v" || args[0] == "--version" || args[0] == "version" {
+			fmt.Printf("Antigravity Cross-Device Synchronizer (agy-sync v%s)\n", config.Version)
+			return
+		}
+		if args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+			printHelp()
+			return
+		}
 	}
 
 	config.EnsureTermuxEnvironment()
