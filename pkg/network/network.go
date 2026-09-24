@@ -6,6 +6,7 @@ import (
 	"net"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -169,7 +170,7 @@ func GetLocalLanIPs() []string {
 
 func ProbeSSHBanner(ip string, port int, timeout time.Duration) (bool, float64, string) {
 	t0 := time.Now()
-	addr := fmt.Sprintf("%s:%d", ip, port)
+	addr := net.JoinHostPort(ip, strconv.Itoa(port))
 	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
 		return false, float64(time.Since(t0).Microseconds()) / 1000.0, ""
