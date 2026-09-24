@@ -74,7 +74,7 @@ tmp_remote = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
 tmp_remote.close()
 
 remote_snap_cmd = (
-    f"python3 -c \"import sqlite3, tempfile, sys, os; "
+    f"{config.PathPrefix} python3 -c \"import sqlite3, tempfile, sys, os; "
     f"p = '{rem_db}'; "
     f"tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False); "
     f"tmp.close(); "
@@ -334,13 +334,13 @@ shutil.rmtree(td, ignore_errors=True)
 `, remConv)
 
 		b64Code := base64.StdEncoding.EncodeToString([]byte(remotePullPy))
-		remoteCmd := fmt.Sprintf(`python3 -c "import base64; exec(base64.b64decode('%s').decode())"`, b64Code)
+		remoteCmd := fmt.Sprintf(`%s python3 -c "import base64; exec(base64.b64decode('%s').decode())"`, config.PathPrefix, b64Code)
 
 		sshArgs := ssh.GetSSHCmd(host, port, remoteCmd, true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(strings.Join(toPull, "\n") + "\n")
 
-		p2 := exec.Command("tar", "-C", config.ConvDir, "-xzf", "-")
+		p2 := exec.Command("tar", "-C", config.ConvDir, "--no-same-owner", "-xzf", "-")
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
 			p2.Stdin = pipe
@@ -484,7 +484,7 @@ if os.path.isdir(b):
 `, remBrain)
 
 	b64Scan := base64.StdEncoding.EncodeToString([]byte(scanPy))
-	cmdStr := fmt.Sprintf(`mkdir -p '%s' && python3 -c "import base64; exec(base64.b64decode('%s').decode())"`, remBrain, b64Scan)
+	cmdStr := fmt.Sprintf(`mkdir -p '%s' && %s python3 -c "import base64; exec(base64.b64decode('%s').decode())"`, remBrain, config.PathPrefix, b64Scan)
 	stdout, _, _, _ := ssh.RunSSHCmd(host, port, cmdStr, false)
 	remoteBrains := make(map[string][2]int64)
 

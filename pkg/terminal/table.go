@@ -85,9 +85,20 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 
 	leftMeta := fmt.Sprintf("Route: %s%s", routeTier, latStr)
 	rightMeta := fmt.Sprintf("Duration: %.2fs · Skew: %s%.3fs", res.Elapsed, skewSign, res.ClockSkew)
+	maxLeft := innerW - StrWidth(rightMeta) - 2
+	if maxLeft < 10 {
+		maxLeft = 10
+	}
+	if StrWidth(leftMeta) > maxLeft {
+		runes := []rune(leftMeta)
+		for len(runes) > 0 && StrWidth(string(runes)+"...") > maxLeft {
+			runes = runes[:len(runes)-1]
+		}
+		leftMeta = string(runes) + "..."
+	}
 	spaceMeta := innerW - StrWidth(leftMeta) - StrWidth(rightMeta)
-	if spaceMeta < 2 {
-		spaceMeta = 2
+	if spaceMeta < 1 {
+		spaceMeta = 1
 	}
 	metaRow := fmt.Sprintf("│ %s%s%s │", leftMeta, strings.Repeat(" ", spaceMeta), rightMeta)
 
@@ -108,11 +119,23 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 		lines = append(lines, divider)
 		for _, ch := range res.Changes {
 			lStr := fmt.Sprintf("%s %s", ch.Icon, ch.Name)
-			sp := innerW - StrWidth(lStr) - StrWidth(ch.Desc)
-			if sp < 2 {
-				sp = 2
+			desc := ch.Desc
+			maxDesc := innerW - StrWidth(lStr) - 2
+			if maxDesc < 10 {
+				maxDesc = 10
 			}
-			lines = append(lines, fmt.Sprintf("│ %s%s%s │", lStr, strings.Repeat(" ", sp), ch.Desc))
+			if StrWidth(desc) > maxDesc {
+				runes := []rune(desc)
+				for len(runes) > 0 && StrWidth(string(runes)+"...") > maxDesc {
+					runes = runes[:len(runes)-1]
+				}
+				desc = string(runes) + "..."
+			}
+			sp := innerW - StrWidth(lStr) - StrWidth(desc)
+			if sp < 1 {
+				sp = 1
+			}
+			lines = append(lines, fmt.Sprintf("│ %s%s%s │", lStr, strings.Repeat(" ", sp), desc))
 		}
 		lines = append(lines, divider)
 		footer := fmt.Sprintf("✨ All states synchronized (%d changed, %d identical)", len(res.Changes), len(res.Unchanged))

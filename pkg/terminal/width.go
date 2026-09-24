@@ -11,7 +11,8 @@ var wideEmojis = map[rune]bool{
 	'⚡': true, '⭐': true, '🟢': true, '🔴': true, '💬': true, '📦': true,
 	'🏷': true, '📜': true, '🧠': true, '🎟': true, '🗂': true, '👥': true,
 	'📝': true, '🛠': true, '⚙': true, '📊': true, '✨': true, '🎉': true,
-	'ℹ': true, '🚀': true, '🔑': true, '🛡': true,
+	'ℹ': true, '🚀': true, '🔑': true, '🛡': true, '🪪': true, '🏊': true,
+	'🐹': true,
 }
 
 // StrWidth calculates visible terminal width accounting for wide chars and ANSI codes.
@@ -30,7 +31,7 @@ func StrWidth(s string) int {
 			(0xFE30 <= ch && ch <= 0xFE4F) ||
 			(0xFF01 <= ch && ch <= 0xFF60) ||
 			(0xFFE0 <= ch && ch <= 0xFFE6) ||
-			(0x1F300 <= ch && ch <= 0x1F9FF) {
+			(0x1F300 <= ch && ch <= 0x1FAFF) {
 			w += 2
 		} else {
 			w += 1

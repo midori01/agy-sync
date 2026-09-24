@@ -186,7 +186,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 	if err != nil || len(targetContent) == 0 {
 		// Local has no Go compiler to cross-compile: ask remote to build for itself if remote has Go!
 		remGoDir := fmt.Sprintf("%s/agy-sync-go", remHome)
-		remBuildCmd := fmt.Sprintf(`if command -v go >/dev/null 2>&1 && [ -d '%s' ]; then (cd '%s' && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X agy-sync/pkg/config.GitCommit=%s" -o '%s' ./cmd/agy-sync 2>/dev/null && echo BUILT || echo FAILED); else echo NO_GO; fi`, remGoDir, remGoDir, config.GitCommit, remBin)
+		remBuildCmd := fmt.Sprintf(`%s if command -v go >/dev/null 2>&1 && [ -d '%s' ]; then (cd '%s' && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X agy-sync/pkg/config.GitCommit=%s" -o '%s' ./cmd/agy-sync 2>/dev/null && echo BUILT || echo FAILED); else echo NO_GO; fi`, config.PathPrefix, remGoDir, remGoDir, config.GitCommit, remBin)
 		stdout, _, _, _ := ssh.RunSSHCmd(host, port, remBuildCmd, false)
 		if strings.Contains(stdout, "BUILT") {
 			return "remote compiled locally"

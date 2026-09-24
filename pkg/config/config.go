@@ -45,7 +45,7 @@ var (
 )
 
 var (
-	Version   = "7.0"
+	Version   = "7.1"
 	GitCommit = "dev"
 )
 
@@ -65,6 +65,7 @@ var ReservedAliases = map[string]bool{
 	"ping": true, "daemon": true, "manifest": true, "list": true, "reconcile": true,
 	"refresh-registry": true, "version": true, "probe-lan": true,
 	"push-settings": true, "settings": true, "is-peer": true,
+	"push-pool": true, "push-accounts": true, "pool-push": true,
 }
 
 var SafeAliasRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-\.]+$`)
@@ -273,13 +274,20 @@ func ParseEndpoint(ep string, defaultPort int) (user, host string, port int, tar
 	port = defaultPort
 	targetPart := ep
 
-	if strings.Contains(ep, ":") {
+	if strings.Contains(ep, "]:") {
 		idx := strings.LastIndex(ep, ":")
-		pStr := ep[idx+1:]
-		if p, err := strconv.Atoi(pStr); err == nil {
+		if p, err := strconv.Atoi(ep[idx+1:]); err == nil {
 			port = p
 			targetPart = ep[:idx]
 		}
+	} else if strings.Count(ep, ":") == 1 {
+		idx := strings.LastIndex(ep, ":")
+		if p, err := strconv.Atoi(ep[idx+1:]); err == nil {
+			port = p
+			targetPart = ep[:idx]
+		}
+	} else if strings.HasPrefix(ep, "[") && strings.HasSuffix(ep, "]") {
+		targetPart = ep[1 : len(ep)-1]
 	}
 
 	if strings.Contains(targetPart, "@") {
@@ -380,6 +388,17 @@ func GetLocalIPs(forceRefresh bool) map[string]bool {
 
 	ips := map[string]bool{
 		"127.0.0.1": true, "localhost": true, "0.0.0.0": true, "::1": true,
+	}
+
+	// 0. Fast-path: Native Go network interfaces (zero-fork, <1ms)
+	if ifAddrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range ifAddrs {
+			if ipnet, ok := a.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+				if ip4 := ipnet.IP.To4(); ip4 != nil {
+					ips[ip4.String()] = true
+				}
+			}
+		}
 	}
 
 	// 1. Configured local endpoint IP
@@ -683,11 +702,16 @@ func EnsureSelfUpToDate() {
 	}
 
 	ldflags := fmt.Sprintf("-s -w -X agy-sync/pkg/config.GitCommit=%s", expectedCommit)
-	cmd := exec.Command("go", "build", "-trimpath", fmt.Sprintf("-ldflags=%s", ldflags), "-o", AgySyncScript, "./cmd/agy-sync")
+	tmpBin := AgySyncScript + fmt.Sprintf(".tmp_self_%d", time.Now().UnixNano())
+	cmd := exec.Command("go", "build", "-trimpath", fmt.Sprintf("-ldflags=%s", ldflags), "-o", tmpBin, "./cmd/agy-sync")
 	cmd.Dir = AgySyncGoDir
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", fmt.Sprintf("GOARCH=%s", runtime.GOARCH))
 	if err := cmd.Run(); err == nil {
+		_ = os.Rename(tmpBin, AgySyncScript)
+		_ = os.Chmod(AgySyncScript, 0755)
 		GitCommit = expectedCommit
+	} else {
+		_ = os.Remove(tmpBin)
 	}
 }
 

@@ -80,7 +80,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 1. Pipeline Handshake
 	stepStatus("Pipeline handshake")
-	handshakeCmd := `echo READY && echo "HOME:$HOME" && echo "USER:$(whoami 2>/dev/null || echo "$USER")" && echo "ARCH:$(uname -m 2>/dev/null || echo unknown)" && echo "COMMIT:$(command -v agy-sync >/dev/null 2>&1 && agy-sync --commit 2>/dev/null || echo NONE)" && echo "TS_IP:$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null || true)" && echo "LAN_IPS:$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/ {print $4}' | cut -d/ -f1) | tr '\n' ',')" && (date +%s.%N 2>/dev/null || date +%s)`
+	handshakeCmd := fmt.Sprintf("%s echo READY && echo \"HOME:$HOME\" && echo \"USER:$(whoami 2>/dev/null || echo \"$USER\")\" && echo \"ARCH:$(uname -m 2>/dev/null || echo unknown)\" && echo \"COMMIT:$(command -v agy-sync >/dev/null 2>&1 && agy-sync --commit 2>/dev/null || echo NONE)\" && echo \"TS_IP:$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null || true)\" && echo \"LAN_IPS:$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/ {print $4}' | cut -d/ -f1) | tr '\\n' ',')\" && (date +%%s.%%N 2>/dev/null || date +%%s)", config.PathPrefix)
 
 	connectTo := 8
 	if host != origHost {
@@ -240,6 +240,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 		config.ToRemotePath(config.SettingsFile, remHome),
 		config.ToRemotePath(config.ProtoSummariesFile, remHome),
 		config.ToRemotePath(config.HistoryFile, remHome),
+		config.ToRemotePath(filepath.Join(config.PoolDir, "bin", "agy-pool"), remHome),
 	}
 	probeCache := BatchProbeRemoteFiles(host, port, batchTargets)
 
@@ -314,7 +315,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	}
 
 	// 3.8 Sync Account Pool Engine
-	engineStat := SyncPoolEngine(host, port, remHome, clockSkew)
+	engineStat := SyncPoolEngine(host, port, remHome, clockSkew, probeCache)
 	if engineStat != "none" {
 		recordAsset("Account Pool Engine", engineStat, "🏊", engineStat == "pushed" || engineStat == "pulled" || engineStat == "installed & ready")
 	}

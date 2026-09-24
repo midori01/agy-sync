@@ -107,7 +107,7 @@ for p in sys.argv[1:]:
             c = open(p, 'rb').read()
             h = hashlib.sha256(c).hexdigest()
             body_h = ""
-            if p.endswith("/agy-sync"):
+            if p.endswith("/agy-sync") or p.endswith("/agy-pool"):
                 b = c.split(b"\n", 1)[1] if c.startswith(b"#!") and b"\n" in c else c
                 body_h = hashlib.sha256(b).hexdigest()
             print(f'{p}\t{int(st.st_mtime)}\t{st.st_size}\t{h}\t{mode}\t{body_h}')
@@ -121,7 +121,7 @@ for p in sys.argv[1:]:
 		quotedPaths = append(quotedPaths, fmt.Sprintf("'%s'", strings.ReplaceAll(p, "'", "'\\''")))
 	}
 
-	cmdStr := fmt.Sprintf("python3 - %s", strings.Join(quotedPaths, " "))
+	cmdStr := fmt.Sprintf("%s (python3 - %s || python - %s)", config.PathPrefix, strings.Join(quotedPaths, " "), strings.Join(quotedPaths, " "))
 	sshArgs := ssh.GetSSHCmd(host, port, cmdStr, true)
 	proc := exec.Command("ssh", sshArgs...)
 	proc.Stdin = strings.NewReader(pyScript)

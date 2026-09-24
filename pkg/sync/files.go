@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -102,7 +103,7 @@ func SyncSingleFile(localPath, remotePath, host string, port int, name string, c
 		if err != nil {
 			return "failed"
 		}
-		proc.Stdin = strings.NewReader(string(data))
+		proc.Stdin = bytes.NewReader(data)
 		if err := proc.Run(); err == nil {
 			return "pushed"
 		}
@@ -293,7 +294,7 @@ func SyncClusterRegistry(host string, port int, clockSkew float64, remHome strin
 		data, _ := json.MarshalIndent(merged, "", "  ")
 		proc.Stdin = strings.NewReader(string(data) + "\n")
 		_ = proc.Run()
-		_, _, _, _ = ssh.RunSSHCmd(host, port, "agy-sync refresh-registry 2>/dev/null || true", false)
+		_, _, _, _ = ssh.RunSSHCmd(host, port, fmt.Sprintf("%s agy-sync refresh-registry 2>/dev/null || true", config.PathPrefix), false)
 	}
 
 	activeCount := 0
@@ -511,7 +512,7 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
-		p2 := exec.Command("tar", "-C", config.ConfigDir, "-xzf", "-")
+		p2 := exec.Command("tar", "-C", config.ConfigDir, "--no-same-owner", "-xzf", "-")
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
 			p2.Stdin = pipe
@@ -882,11 +883,31 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 	return fmt.Sprintf("identical (%d accounts)", len(mergedAccs))
 }
 
-func SyncPoolEngine(host string, port int, remHome string, clockSkew float64) string {
+func SyncPoolEngine(host string, port int, remHome string, clockSkew float64, probeCache ...map[string]*RemoteFileInfo) string {
 	remPoolDir := fmt.Sprintf("%s/agy-pool", remHome)
 	localHasPool := false
 	if fi, err := os.Stat(config.PoolDir); err == nil && fi.IsDir() {
 		localHasPool = true
+	}
+
+	localBin := filepath.Join(config.PoolDir, "bin", "agy-pool")
+	remBin := fmt.Sprintf("%s/bin/agy-pool", remPoolDir)
+
+	var locHash string
+	var locMTime int64
+	if fi, err := os.Stat(localBin); err == nil {
+		if data, err := os.ReadFile(localBin); err == nil {
+			_, locHash = GetScriptBodyAndHash(data)
+		}
+		locMTime = fi.ModTime().Unix()
+	}
+
+	// 1-RTT Fast Path: Probe cache hit check (0 extra network roundtrips)
+	if len(probeCache) > 0 && probeCache[0] != nil && probeCache[0][remBin] != nil {
+		cached := probeCache[0][remBin]
+		if locHash != "" && (cached.BodySHA == locHash || cached.SHA256 == locHash) {
+			return "up-to-date"
+		}
 	}
 
 	stdout, _, _, _ := ssh.RunSSHCmd(host, port, fmt.Sprintf("test -d '%s' && echo YES || echo NO", remPoolDir), false)
@@ -896,20 +917,8 @@ func SyncPoolEngine(host string, port int, remHome string, clockSkew float64) st
 		return "none"
 	}
 
-	localBin := filepath.Join(config.PoolDir, "bin", "agy-pool")
-	remBin := fmt.Sprintf("%s/bin/agy-pool", remPoolDir)
-
 	if localHasPool && remoteHasPool {
-		var locHash string
-		var locMTime int64
-		if fi, err := os.Stat(localBin); err == nil {
-			if data, err := os.ReadFile(localBin); err == nil {
-				_, locHash = GetScriptBodyAndHash(data)
-			}
-			locMTime = fi.ModTime().Unix()
-		}
-
-		pyProbe := fmt.Sprintf(`python3 -c "
+		pyProbe := fmt.Sprintf(`%s python3 -c "
 import os, hashlib
 p = '%s'
 if os.path.isfile(p):
@@ -919,7 +928,7 @@ if os.path.isfile(p):
     print(f'{int(st.st_mtime)} {hashlib.sha256(b).hexdigest()}')
 else:
     print('NONE')
-" 2>/dev/null || echo NONE`, remBin)
+" 2>/dev/null || echo NONE`, config.PathPrefix, remBin)
 
 		outProbe, _, _, _ := ssh.RunSSHCmd(host, port, pyProbe, false)
 		outProbe = strings.TrimSpace(outProbe)
@@ -942,7 +951,7 @@ else:
 			// Remote is newer, pull to local
 			sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=.git -czf - agy-pool", remHome), true)
 			p1 := exec.Command("ssh", sshArgs...)
-			p2 := exec.Command("tar", "-C", config.HomeDir, "-xzf", "-")
+			p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
 			pipe, err := p1.StdoutPipe()
 			if err == nil {
 				p2.Stdin = pipe
@@ -996,8 +1005,10 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 		localHasGo = true
 	}
 
-	stdout, _, _, _ := ssh.RunSSHCmd(host, port, fmt.Sprintf("test -d '%s' && echo YES || echo NO", remGoDir), false)
-	remoteHasGo := strings.Contains(stdout, "YES")
+	remCheckCmd := fmt.Sprintf("if [ -d '%s' ]; then echo YES; git -C '%s' rev-parse HEAD 2>/dev/null || echo NONE; git -C '%s' log -1 --format=%%ct 2>/dev/null || echo 0; git -C '%s' status --porcelain 2>/dev/null; else echo NO; fi", remGoDir, remGoDir, remGoDir, remGoDir)
+	remOut, _, _, _ := ssh.RunSSHCmd(host, port, remCheckCmd, false)
+	remLines := strings.Split(strings.TrimSpace(remOut), "\n")
+	remoteHasGo := (len(remLines) > 0 && strings.TrimSpace(remLines[0]) == "YES")
 
 	if !localHasGo && !remoteHasGo {
 		return "none"
@@ -1055,20 +1066,17 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 		}
 	}
 
-	remCheckCmd := fmt.Sprintf("git -C '%s' rev-parse HEAD 2>/dev/null || echo NONE; git -C '%s' log -1 --format=%%ct 2>/dev/null || echo 0; git -C '%s' status --porcelain 2>/dev/null", remGoDir, remGoDir, remGoDir)
-	remOut, _, _, _ := ssh.RunSSHCmd(host, port, remCheckCmd, false)
-	remLines := strings.Split(strings.TrimSpace(remOut), "\n")
 	remHash := ""
 	var remTime int64
 	remDirty := false
-	if len(remLines) > 0 {
-		remHash = strings.TrimSpace(remLines[0])
-	}
 	if len(remLines) > 1 {
-		remTime, _ = strconv.ParseInt(strings.TrimSpace(remLines[1]), 10, 64)
+		remHash = strings.TrimSpace(remLines[1])
 	}
 	if len(remLines) > 2 {
-		for _, l := range remLines[2:] {
+		remTime, _ = strconv.ParseInt(strings.TrimSpace(remLines[2]), 10, 64)
+	}
+	if len(remLines) > 3 {
+		for _, l := range remLines[3:] {
 			if len(strings.TrimSpace(l)) > 0 {
 				remDirty = true
 				break
