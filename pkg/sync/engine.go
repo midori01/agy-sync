@@ -53,7 +53,7 @@ func GetOrBuildTargetBinary(targetArch string) ([]byte, error) {
 	return os.ReadFile(cachedBin)
 }
 
-func SyncEngine(host string, port int, remHome string, remArch string, remCommit string, clockSkew float64, probeCache map[string]*RemoteFileInfo) string {
+func SyncEngine(host string, port int, remHome string, remArch string, remCommit string, goSrcStat string, clockSkew float64, probeCache map[string]*RemoteFileInfo) string {
 	fi, err := os.Stat(config.AgySyncScript)
 	if err != nil || fi.IsDir() {
 		return "none"
@@ -64,12 +64,36 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 		remBin = config.ToRemotePath(config.AgySyncScript, remHome)
 	}
 
-	// 1. Commit-based Version Check (Ultra-Fast & Cross-Architecture Compatible)
+	// 1. Conflict and Dirty Protection: Never overwrite if source diverged or remote has uncommitted work
+	if strings.Contains(goSrcStat, "dirty") || strings.Contains(goSrcStat, "conflict") {
+		return "safety guard (source diverged)"
+	}
+
+	// 2. If source code was PULLED from remote (remote was newer!):
+	// Local MUST NOT push its old binary to remote!
+	// Instead, local compiles the newly pulled source code for ITS OWN architecture.
+	if goSrcStat == "pulled" || goSrcStat == "pulled & ready" {
+		out, err := exec.Command("git", "-C", config.AgySyncGoDir, "rev-parse", "--short", "HEAD").Output()
+		if err == nil {
+			newCommit := strings.TrimSpace(string(out))
+			ldflags := fmt.Sprintf("-s -w -X agy-sync/pkg/config.GitCommit=%s", newCommit)
+			buildCmd := exec.Command("go", "build", "-trimpath", fmt.Sprintf("-ldflags=%s", ldflags), "-o", config.AgySyncScript, "./cmd/agy-sync")
+			buildCmd.Dir = config.AgySyncGoDir
+			buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", fmt.Sprintf("GOARCH=%s", runtime.GOARCH))
+			if err := buildCmd.Run(); err == nil {
+				config.GitCommit = newCommit
+				return "pulled & rebuilt locally"
+			}
+		}
+		return "pulled"
+	}
+
+	// 3. 1-RTT Commit Match: If binary commits match, 100% identical across any architecture
 	if remCommit != "" && remCommit != "NONE" && remCommit != "dev" && config.GitCommit != "dev" && remCommit == config.GitCommit {
 		return "identical"
 	}
 
-	// 2. Same-Architecture Direct Byte Check
+	// 4. Same-Architecture Direct Byte Check (Fallback for dev or unversioned binaries)
 	isRemSameArch := (strings.Contains(remArch, "x86_64") || strings.Contains(remArch, "amd64")) == (runtime.GOARCH == "amd64")
 
 	if isRemSameArch {
@@ -92,13 +116,13 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 		}
 	}
 
-	// 3. Resolve Target Binary Content
+	// 5. If source was identical or pushed (local was newer), resolve target binary content
 	targetContent, err := GetOrBuildTargetBinary(remArch)
 	if err != nil || len(targetContent) == 0 {
 		return "none"
 	}
 
-	// 4. Push binary to remote
+	// 6. Push binary to remote
 	remParent := filepath.Dir(remBin)
 	tmpRem := fmt.Sprintf("%s.tmp_%d_%s", remBin, time.Now().Unix(), randomToken(3))
 	remTargetMTime := fi.ModTime().Unix() + int64(clockSkew)

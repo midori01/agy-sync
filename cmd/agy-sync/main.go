@@ -73,6 +73,7 @@ func main() {
 	}
 
 	config.EnsureTermuxEnvironment()
+	config.EnsureSelfUpToDate()
 	cluster.ReconcileRegistry()
 
 	if len(args) == 0 {

@@ -274,10 +274,17 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	handoffStat := SyncSingleFile(config.HandoffFile, config.ToRemotePath(config.HandoffFile, remHome), host, port, "session_handoff.md", clockSkew, probeCache)
 	recordAsset("Memory Relay", handoffStat, "🧠", handoffStat == "pushed" || handoffStat == "pulled")
 
-	// 3.5 Sync Engine
+	// 3.4 Sync Go Synchronizer Source Code (determines git version parity & direction)
+	stepStatus("Go synchronizer source")
+	goSrcStat := SyncAgySyncGo(host, port, remHome, clockSkew)
+	if goSrcStat != "none" {
+		recordAsset("Go Synchronizer Source", goSrcStat, "🐹", goSrcStat == "pushed" || goSrcStat == "pulled" || goSrcStat == "installed & ready")
+	}
+
+	// 3.5 Sync Engine (uses goSrcStat to safely determine binary build/push/rebuild)
 	stepStatus("Synchronizer engine")
-	binStat := SyncEngine(host, port, remHome, remArch, remCommit, clockSkew, probeCache)
-	recordAsset("Synchronizer Engine", binStat, "⚡", binStat == "pushed" || binStat == "pulled")
+	binStat := SyncEngine(host, port, remHome, remArch, remCommit, goSrcStat, clockSkew, probeCache)
+	recordAsset("Synchronizer Engine", binStat, "⚡", binStat == "pushed" || binStat == "pulled" || strings.Contains(binStat, "rebuilt"))
 
 	// 3.6 Sync Token
 	stepStatus("Account pool & tokens")
@@ -307,12 +314,6 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	engineStat := SyncPoolEngine(host, port, remHome, clockSkew)
 	if engineStat != "none" {
 		recordAsset("Account Pool Engine", engineStat, "🏊", engineStat == "pushed" || engineStat == "pulled" || engineStat == "installed & ready")
-	}
-
-	// 3.9 Sync Go Synchronizer Source Code
-	goSrcStat := SyncAgySyncGo(host, port, remHome, clockSkew)
-	if goSrcStat != "none" {
-		recordAsset("Go Synchronizer Source", goSrcStat, "🐹", goSrcStat == "pushed" || goSrcStat == "pulled" || goSrcStat == "installed & ready")
 	}
 
 	// 4. Sync CLI Settings & Proto Summaries

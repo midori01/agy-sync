@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -654,6 +655,36 @@ func EnsureTermuxEnvironment() {
 				_ = exec.Command(path).Start()
 			}
 		}
+	}
+}
+
+func EnsureSelfUpToDate() {
+	if fi, err := os.Stat(AgySyncGoDir); err != nil || !fi.IsDir() {
+		return
+	}
+	out, err := exec.Command("git", "-C", AgySyncGoDir, "rev-parse", "--short", "HEAD").Output()
+	if err != nil {
+		return
+	}
+	headCommit := strings.TrimSpace(string(out))
+	if headCommit == "" {
+		return
+	}
+	dirty := ""
+	if out, err := exec.Command("git", "-C", AgySyncGoDir, "status", "--porcelain").Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+		dirty = "-dirty"
+	}
+	expectedCommit := headCommit + dirty
+	if expectedCommit == GitCommit {
+		return
+	}
+
+	ldflags := fmt.Sprintf("-s -w -X agy-sync/pkg/config.GitCommit=%s", expectedCommit)
+	cmd := exec.Command("go", "build", "-trimpath", fmt.Sprintf("-ldflags=%s", ldflags), "-o", AgySyncScript, "./cmd/agy-sync")
+	cmd.Dir = AgySyncGoDir
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", fmt.Sprintf("GOARCH=%s", runtime.GOARCH))
+	if err := cmd.Run(); err == nil {
+		GitCommit = expectedCommit
 	}
 }
 

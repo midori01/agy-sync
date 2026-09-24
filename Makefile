@@ -1,5 +1,5 @@
 BINDIR ?= $(HOME)/.gemini/antigravity-cli/bin
-GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")$(shell git diff --quiet 2>/dev/null || echo "-dirty")
 LDFLAGS := -s -w -X agy-sync/pkg/config.GitCommit=$(GIT_COMMIT)
 
 .PHONY: all clean install linux-amd64 linux-arm64
