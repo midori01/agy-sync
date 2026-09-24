@@ -14,19 +14,23 @@ type ChangeItem struct {
 }
 
 type SyncResult struct {
-	PeerName   string
-	RouteTier  string
-	RouteLat   float64
-	ClockSkew  float64
-	Elapsed    float64
-	Success    bool
-	Error      string
-	Changes    []ChangeItem
-	Unchanged  []string
-	DBPushed   int
-	DBPulled   int
-	ArtPushed  int
-	ArtPulled  int
+	PeerName    string
+	RouteTier   string
+	RouteLat    float64
+	ClockSkew   float64
+	Elapsed     float64
+	Success     bool
+	HasWarnings bool
+	HasFailures bool
+	Warnings    []ChangeItem
+	Failures    []ChangeItem
+	Error       string
+	Changes     []ChangeItem
+	Unchanged   []string
+	DBPushed    int
+	DBPulled    int
+	ArtPushed   int
+	ArtPulled   int
 }
 
 func CompactPath(pStr string, maxW ...int) string {
@@ -119,10 +123,12 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 	var lines []string
 	lines = append(lines, top, metaRow)
 
-	if !res.Success {
+	if !res.Success || res.HasFailures {
 		lines = append(lines, divider)
 		errMsg := res.Error
-		if errMsg == "" {
+		if errMsg == "" && len(res.Failures) > 0 {
+			errMsg = fmt.Sprintf("%s: %s", res.Failures[0].Name, res.Failures[0].Desc)
+		} else if errMsg == "" {
 			errMsg = "Sync interrupted or failed"
 		}
 		lines = append(lines, fmt.Sprintf("│ %s │", PadTo("❌ "+errMsg, innerW)))
@@ -157,6 +163,9 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 		}
 		lines = append(lines, divider)
 		footer := fmt.Sprintf("✨ All states synchronized (%d changed, %d identical)", len(res.Changes), len(res.Unchanged))
+		if res.HasWarnings {
+			footer = fmt.Sprintf("⚠️ Synchronized with warnings (%d changed, %d identical, %d diverged)", len(res.Changes)-len(res.Warnings), len(res.Unchanged), len(res.Warnings))
+		}
 		lines = append(lines, fmt.Sprintf("│ %s │", PadTo(footer, innerW)))
 	}
 
@@ -210,8 +219,12 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 		}
 
 		resStr := "❌ Failed"
-		if res.Success {
-			resStr = "🟢 Synced"
+		if res.Success && !res.HasFailures {
+			if res.HasWarnings {
+				resStr = "🟡 Diverg"
+			} else {
+				resStr = "🟢 Synced"
+			}
 		}
 
 		dbStr := "—"
@@ -253,23 +266,49 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 		lines = append(lines, fmt.Sprintf("│ %s │", strings.Join(rowCells, " │ ")))
 	}
 
+	warnCnt := 0
+	for _, res := range results {
+		if res.Success && res.HasWarnings {
+			warnCnt++
+		}
+	}
+
 	lines = append(lines, MakeTableDivider(colWidths, "├", "┴", "┤"))
 	footer := fmt.Sprintf("✨ Cluster Sync: %d/%d nodes synced in %.2fs (%d failed)", successCnt, len(results), totalElapsed, failCnt)
+	if warnCnt > 0 && failCnt == 0 {
+		footer = fmt.Sprintf("⚠️ Cluster Sync: %d/%d synced, %d diverged in %.2fs", successCnt-warnCnt, len(results), warnCnt, totalElapsed)
+	} else if failCnt > 0 {
+		footer = fmt.Sprintf("❌ Cluster Sync: %d/%d succeeded, %d failed in %.2fs", successCnt, len(results), failCnt, totalElapsed)
+	}
 	lines = append(lines, fmt.Sprintf("│ %s │", PadTo(footer, innerW)))
 	lines = append(lines, fmt.Sprintf("└%s┘", strings.Repeat("─", totW-2)))
 
 	fmt.Println(strings.Join(lines, "\n"))
 
+	if warnCnt > 0 {
+		fmt.Println()
+		for _, res := range results {
+			if res.Success && res.HasWarnings {
+				pName := res.PeerName
+				for _, w := range res.Warnings {
+					fmt.Printf("[⚠️] Warning on node '%s' (%s): %s\n", pName, w.Name, w.Desc)
+				}
+			}
+		}
+	}
+
 	if failCnt > 0 {
 		fmt.Println()
 		for _, res := range results {
-			if !res.Success {
+			if !res.Success || res.HasFailures {
 				pName := res.PeerName
 				if pName == "" {
 					pName = "unknown"
 				}
 				err := res.Error
-				if err == "" {
+				if err == "" && len(res.Failures) > 0 {
+					err = fmt.Sprintf("%s: %s", res.Failures[0].Name, res.Failures[0].Desc)
+				} else if err == "" {
 					err = "Unknown error"
 				}
 				fmt.Printf("[❌] Failed node '%s': %s\n", pName, err)

@@ -30,7 +30,8 @@ type PreResolvedRoute struct {
 	Latency   float64
 }
 
-func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch bool, preResolved *PreResolvedRoute, extSpinner *terminal.Spinner) *terminal.SyncResult {
+func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch bool, preResolved *PreResolvedRoute, extSpinner *terminal.Spinner, force ...bool) *terminal.SyncResult {
+	isForce := len(force) > 0 && force[0]
 	title := fmt.Sprintf("node '%s' (%s:%d)", peerName, host, port)
 	if peerName == "" {
 		title = fmt.Sprintf("%s:%d", host, port)
@@ -289,9 +290,23 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	var changes []terminal.ChangeItem
 	var unchanged []string
+	var warnings []terminal.ChangeItem
+	var failures []terminal.ChangeItem
 
 	recordAsset := func(name, desc, icon string, isChanged bool) {
-		if isChanged {
+		lowerDesc := strings.ToLower(desc)
+		isFail := strings.Contains(lowerDesc, "failed") || strings.Contains(lowerDesc, "error")
+		isWarn := strings.Contains(lowerDesc, "dirty") || strings.Contains(lowerDesc, "conflict") ||
+			strings.Contains(lowerDesc, "safety guard") || strings.Contains(lowerDesc, "diverged") ||
+			strings.Contains(lowerDesc, "skipped")
+
+		if isFail {
+			failures = append(failures, terminal.ChangeItem{Name: name, Desc: desc, Icon: "❌"})
+			changes = append(changes, terminal.ChangeItem{Name: name, Desc: desc, Icon: "❌"})
+		} else if isWarn {
+			warnings = append(warnings, terminal.ChangeItem{Name: name, Desc: desc, Icon: "⚠️"})
+			changes = append(changes, terminal.ChangeItem{Name: name, Desc: desc, Icon: "⚠️"})
+		} else if isChanged {
 			changes = append(changes, terminal.ChangeItem{Name: name, Desc: desc, Icon: icon})
 		} else {
 			unchanged = append(unchanged, name)
@@ -323,15 +338,15 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 3.4 Sync Go Synchronizer Source Code (determines git version parity & direction)
 	stepStatus("Go synchronizer source")
-	goSrcStat := SyncAgySyncGo(host, port, remHome, clockSkew)
+	goSrcStat := SyncAgySyncGo(host, port, remHome, clockSkew, isForce)
 	if goSrcStat != "none" {
 		recordAsset("Go Synchronizer Source", goSrcStat, "🐹", goSrcStat == "pushed" || goSrcStat == "pulled" || goSrcStat == "installed & ready")
 	}
 
 	// 3.5 Sync Engine (uses goSrcStat to safely determine binary build/push/rebuild)
 	stepStatus("Synchronizer engine")
-	binStat := SyncEngine(host, port, remHome, remArch, remCommit, goSrcStat, clockSkew, probeCache)
-	recordAsset("Synchronizer Engine", binStat, "⚡", binStat == "pushed" || binStat == "pulled" || strings.Contains(binStat, "rebuilt"))
+	binStat := SyncEngine(host, port, remHome, remArch, remCommit, goSrcStat, clockSkew, probeCache, isForce)
+	recordAsset("Synchronizer Engine", binStat, "⚡", binStat == "pushed" || binStat == "pulled" || strings.Contains(binStat, "rebuilt") || strings.Contains(binStat, "compiled"))
 
 	// 3.6 Sync Token
 	stepStatus("Account pool & tokens")
@@ -447,19 +462,27 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 		}
 	}
 
+	hasFailures := len(failures) > 0
+	hasWarnings := len(warnings) > 0
+	success := !hasFailures
+
 	result := &terminal.SyncResult{
-		Success:   true,
-		PeerName:  peerName,
-		RouteTier: routeTier,
-		RouteLat:  routeLat,
-		ClockSkew: clockSkew,
-		Elapsed:   elapsed,
-		Changes:   changes,
-		Unchanged: unchanged,
-		DBPushed:  convPushed,
-		DBPulled:  convPulled,
-		ArtPushed: brainPushed,
-		ArtPulled: brainPulled,
+		Success:     success,
+		HasWarnings: hasWarnings,
+		HasFailures: hasFailures,
+		Warnings:    warnings,
+		Failures:    failures,
+		PeerName:    peerName,
+		RouteTier:   routeTier,
+		RouteLat:    routeLat,
+		ClockSkew:   clockSkew,
+		Elapsed:     elapsed,
+		Changes:     changes,
+		Unchanged:   unchanged,
+		DBPushed:    convPushed,
+		DBPulled:    convPulled,
+		ArtPushed:   brainPushed,
+		ArtPulled:   brainPulled,
 	}
 
 	if !isBatch {
@@ -468,7 +491,8 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	return result
 }
 
-func SyncAllPeers(verbose bool) {
+func SyncAllPeers(verbose bool, force ...bool) {
+	isForce := len(force) > 0 && force[0]
 	devices := cluster.LoadDevices()
 	localName := config.GetLocalDeviceName()
 	localEp := config.GetLocalEndpoint()
@@ -621,13 +645,17 @@ func SyncAllPeers(verbose bool) {
 			Latency:   curLat,
 		}
 
-		res := SyncWithPeer(r.OrigHost, r.OrigPort, r.Name, verbose, true, route, nodeSpinner)
+		res := SyncWithPeer(r.OrigHost, r.OrigPort, r.Name, verbose, true, route, nodeSpinner, isForce)
 		results = append(results, res)
 
 		var finalStatus string
-		if res.Success {
-			successCnt++
-			finalStatus = fmt.Sprintf("\033[32m✓\033[0m %s... done \033[90m(%.2fs)\033[0m", nodePrefix, res.Elapsed)
+		if res.Success && !res.HasFailures {
+			if res.HasWarnings {
+				finalStatus = fmt.Sprintf("\033[33m⚠\033[0m %s... diverged \033[90m(%.2fs)\033[0m", nodePrefix, res.Elapsed)
+			} else {
+				successCnt++
+				finalStatus = fmt.Sprintf("\033[32m✓\033[0m %s... done \033[90m(%.2fs)\033[0m", nodePrefix, res.Elapsed)
+			}
 		} else {
 			failCnt++
 			finalStatus = fmt.Sprintf("\033[31m✗\033[0m %s... failed \033[90m(%.2fs)\033[0m", nodePrefix, res.Elapsed)

@@ -23,8 +23,8 @@ Antigravity Cross-Device Full Bidirectional Synchronizer (agy-sync v%s)
 
 Basic Usage:
   agy-sync                                  Sync with default peer (Bento Dashboard)
-  agy-sync all [--verbose|-V]               Sync with all enrolled cluster peers (Matrix Table)
-  agy-sync <alias> [--verbose|-V]           Sync with specific peer (e.g. agy-sync peer1)
+  agy-sync all [-f|--force] [-V]            Sync with all enrolled cluster peers (Matrix Table)
+  agy-sync <alias> [-f|--force] [-V]        Sync with specific peer (e.g. agy-sync peer1)
   agy-sync ssh [alias] [args...]            Interactive SSH session to peer node (or native ssh <peer>)
   agy-sync probe-lan <alias> [ip]           Probe if peer is directly reachable over LAN
   agy-sync is-peer <target>                 Check if host/alias is an enrolled cluster peer
@@ -180,12 +180,15 @@ func main() {
 		return
 	case "all", "--all":
 		verbose := false
+		force := false
 		for _, a := range args[1:] {
 			if a == "-V" || a == "-v" || a == "--verbose" {
 				verbose = true
+			} else if a == "-f" || a == "--force" {
+				force = true
 			}
 		}
-		sync.SyncAllPeers(verbose)
+		sync.SyncAllPeers(verbose, force)
 		return
 	case "alias", "rename":
 		if len(args) < 2 || args[1] == "-h" || args[1] == "--help" {
@@ -346,6 +349,7 @@ func main() {
 		// Target peer or ad-hoc endpoint sync
 		verbose := false
 		saveTarget := false
+		force := false
 		customPort := 0
 		var cleanArgs []string
 
@@ -354,6 +358,9 @@ func main() {
 			a := args[i]
 			if a == "-V" || a == "-v" || a == "--verbose" {
 				verbose = true
+				i++
+			} else if a == "-f" || a == "--force" {
+				force = true
 				i++
 			} else if a == "--save" {
 				saveTarget = true
@@ -383,7 +390,7 @@ func main() {
 			if targetHost == "" {
 				targetHost = defAlias
 			}
-			sync.SyncWithPeer(targetHost, defPort, defAlias, verbose, false, nil, nil)
+			sync.SyncWithPeer(targetHost, defPort, defAlias, verbose, false, nil, nil, force)
 			return
 		}
 
@@ -403,7 +410,7 @@ func main() {
 				cluster.SaveDefaultTarget(targetSSH, port, matchedAlias)
 				fmt.Printf("[✅] Saved default target: %s:%d\n", targetSSH, port)
 			}
-			sync.SyncWithPeer(targetSSH, port, matchedAlias, verbose, false, nil, nil)
+			sync.SyncWithPeer(targetSSH, port, matchedAlias, verbose, false, nil, nil, force)
 			return
 		}
 
@@ -422,7 +429,7 @@ func main() {
 				cluster.SaveDefaultTarget(targetSSH, port, "")
 				fmt.Printf("[✅] Saved default target: %s:%d\n", targetSSH, port)
 			}
-			sync.SyncWithPeer(targetSSH, port, host, verbose, false, nil, nil)
+			sync.SyncWithPeer(targetSSH, port, host, verbose, false, nil, nil, force)
 			return
 		}
 

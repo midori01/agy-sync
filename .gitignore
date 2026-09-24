@@ -1,2 +1,6 @@
 bin/
 *.tmp*
+agy-sync
+agy-sync-*
+*.o
+*.test

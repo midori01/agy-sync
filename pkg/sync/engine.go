@@ -108,7 +108,7 @@ fi`, remGoDir, normLocalArch, remCommit, remGoDir, remGoDir, remGoDir, normLocal
 	return nil, fmt.Errorf("remote %s cannot supply %s binary", host, normLocalArch)
 }
 
-func SyncEngine(host string, port int, remHome string, remArch string, remCommit string, goSrcStat string, clockSkew float64, probeCache map[string]*RemoteFileInfo) string {
+func SyncEngine(host string, port int, remHome string, remArch string, remCommit string, goSrcStat string, clockSkew float64, probeCache map[string]*RemoteFileInfo, force ...bool) string {
 	fi, err := os.Stat(config.AgySyncScript)
 	if err != nil || fi.IsDir() {
 		return "none"
@@ -119,9 +119,11 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 		remBin = config.ToRemotePath(config.AgySyncScript, remHome)
 	}
 
-	// 1. Conflict and Dirty Protection: Never overwrite if source diverged or remote has uncommitted work
-	if strings.Contains(goSrcStat, "dirty") || strings.Contains(goSrcStat, "conflict") {
-		return "safety guard (source diverged)"
+	isForce := len(force) > 0 && force[0]
+
+	// 1. 1-RTT Commit Match: If binary commits match, 100% identical across any architecture
+	if remCommit != "" && remCommit != "NONE" && remCommit != "dev" && config.GitCommit != "dev" && remCommit == config.GitCommit {
+		return "identical"
 	}
 
 	// 2. If source code was PULLED from remote (remote was newer!):
@@ -164,9 +166,15 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 		return "pulled"
 	}
 
-	// 3. 1-RTT Commit Match: If binary commits match, 100% identical across any architecture
-	if remCommit != "" && remCommit != "NONE" && remCommit != "dev" && config.GitCommit != "dev" && remCommit == config.GitCommit {
-		return "identical"
+	// 3. Conflict and Dirty Protection:
+	// Only guard against binary overwrite if remote has an uncommitted development binary (remCommit == "dev")
+	// and source diverged, unless force flag is specified.
+	// When remCommit is a known older git commit, remote's binary is strictly an outdated release,
+	// so the new production release must be pushed to keep the cluster executable up to date!
+	if !isForce && (strings.Contains(goSrcStat, "dirty") || strings.Contains(goSrcStat, "conflict")) {
+		if remCommit == "dev" {
+			return "safety guard (source diverged)"
+		}
 	}
 
 	// 4. Same-Architecture Direct Byte Check (Fallback for dev or unversioned binaries)

@@ -1014,14 +1014,16 @@ fi`, remPoolDir, remPoolDir, remPoolDir, remPoolDir)
 	return "none"
 }
 
-func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) string {
+func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64, force ...bool) string {
 	remGoDir := fmt.Sprintf("%s/agy-sync-go", remHome)
 	localHasGo := false
 	if fi, err := os.Stat(config.AgySyncGoDir); err == nil && fi.IsDir() {
 		localHasGo = true
 	}
 
-	remCheckCmd := fmt.Sprintf("if [ -d '%s' ]; then echo YES; git -C '%s' rev-parse HEAD 2>/dev/null || echo NONE; git -C '%s' log -1 --format=%%ct 2>/dev/null || echo 0; git -C '%s' status --porcelain 2>/dev/null; else echo NO; fi", remGoDir, remGoDir, remGoDir, remGoDir)
+	isForce := len(force) > 0 && force[0]
+
+	remCheckCmd := fmt.Sprintf("if [ -d '%s' ]; then echo YES; git -C '%s' rev-parse HEAD 2>/dev/null || echo NONE; git -C '%s' log -1 --format=%%ct 2>/dev/null || echo 0; git -C '%s' status --porcelain --untracked-files=no 2>/dev/null; else echo NO; fi", remGoDir, remGoDir, remGoDir, remGoDir)
 	remOut, _, _, _ := ssh.RunSSHCmd(host, port, remCheckCmd, false)
 	remLines := strings.Split(strings.TrimSpace(remOut), "\n")
 	remoteHasGo := (len(remLines) > 0 && strings.TrimSpace(remLines[0]) == "YES")
@@ -1062,7 +1064,7 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 		locTime, _ = strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
 	}
 	locDirty := false
-	if out, err := exec.Command("git", "-C", config.AgySyncGoDir, "status", "--porcelain").Output(); err == nil {
+	if out, err := exec.Command("git", "-C", config.AgySyncGoDir, "status", "--porcelain", "--untracked-files=no").Output(); err == nil {
 		if len(strings.TrimSpace(string(out))) > 0 {
 			locDirty = true
 		}
@@ -1086,32 +1088,36 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 		}
 	}
 
+	if isForce && remDirty {
+		cleanCmd := fmt.Sprintf("git -C '%s' checkout . 2>/dev/null && git -C '%s' clean -fd 2>/dev/null", remGoDir, remGoDir)
+		_, _, _, _ = ssh.RunSSHCmd(host, port, cleanCmd, false)
+		remDirty = false
+	}
+
 	if locHash != "" && remHash != "" && locHash == remHash && !locDirty && !remDirty {
 		return "identical"
 	}
 
-	// Conflict protection: if both sides are dirty with uncommitted edits, never overwrite either side
-	if locDirty && remDirty {
+	// Conflict protection: if both sides are dirty with uncommitted edits, never overwrite either side unless force
+	if !isForce && locDirty && remDirty {
 		return "conflict (both dirty)"
 	}
-	// Safety protection: if remote is dirty and local is clean, never overwrite remote's uncommitted work
-	if remDirty && !locDirty {
+	// Safety protection: if remote is dirty and local is clean, never overwrite remote's uncommitted work unless force
+	if !isForce && remDirty && !locDirty {
 		return "remote modified (dirty)"
 	}
 
 	// Determine direction:
-	// If local has uncommitted work (locDirty), local takes precedence to push
+	// If local has uncommitted work (locDirty) or force, local takes precedence to push
 	// If both are clean, compare commit timestamps
 	shouldPush := false
-	if locDirty && !remDirty {
-		shouldPush = true
-	} else if locTime >= remTime {
+	if isForce || (locDirty && !remDirty) || locTime >= remTime {
 		shouldPush = true
 	}
 
 	if shouldPush {
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("git -C '%s' checkout . 2>/dev/null; git -C '%s' clean -fd 2>/dev/null; tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remGoDir, remGoDir, remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		if err := RunPipedCommands(p1, p2); err == nil {
 			return "pushed"
