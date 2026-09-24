@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -176,7 +177,7 @@ fi
 
 	// 3. Hostname Configuration
 	if newHostname != "" && newHostname != remoteHostname {
-		fmt.Printf("[🏷️] Setting system hostname to '%s'...\n", newHostname)
+		fmt.Printf("[🔖] Setting system hostname to '%s'...\n", newHostname)
 		hnameScript := fmt.Sprintf(`
 SUDO=""
 if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
@@ -602,11 +603,15 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 
 	mux.HandleFunc(fmt.Sprintf("/exchange/%s", token), func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
-		peerPub := r.FormValue("pubkey")
-		peerName := r.FormValue("name")
+		peerPub := strings.TrimSpace(r.FormValue("pubkey"))
+		peerName := strings.TrimSpace(r.FormValue("name"))
 		peerLanIPs := r.FormValue("lan_ips")
 
-		if peerPub != "" {
+		if peerPub != "" && (strings.HasPrefix(peerPub, "ssh-") || strings.HasPrefix(peerPub, "ecdsa-")) {
+			peerName = regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`).ReplaceAllString(peerName, "")
+			if peerName == "" {
+				peerName = "node"
+			}
 			reg := config.LoadRegistry()
 			alias := cluster.GetUniqueAlias(peerName, peerPub, reg)
 			pairMu.Lock()

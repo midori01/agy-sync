@@ -63,7 +63,12 @@ func PadTo(s string, targetWidth int, align ...string) string {
 			for len(runes) > 0 && StrWidth(string(runes)) > targetWidth {
 				runes = runes[:len(runes)-1]
 			}
-			return string(runes)
+			truncated := string(runes)
+			diff := targetWidth - StrWidth(truncated)
+			if diff > 0 {
+				truncated += strings.Repeat(" ", diff)
+			}
+			return truncated
 		}
 		return s
 	}

@@ -232,10 +232,11 @@ func ProbeSSHBanner(ip string, port int, timeout time.Duration) (bool, float64, 
 
 	if err == nil && n > 0 {
 		banner := strings.TrimSpace(string(buf[:n]))
+		banner = strings.ReplaceAll(banner, "\r", "")
 		if idx := strings.IndexByte(banner, '\n'); idx >= 0 {
 			banner = strings.TrimSpace(banner[:idx])
 		}
-		if strings.HasPrefix(banner, "SSH-2.0-") {
+		if strings.HasPrefix(banner, "SSH-") {
 			effLat := tcpLat
 			if tcpLat < 10.0 && totalLat >= 10.0 {
 				effLat = totalLat
@@ -300,6 +301,10 @@ func ResolveFastestEndpoint(host string, port int, peerName string) (effectiveHo
 	defRetHost := host
 	if effectiveUser != "" && !strings.Contains(host, "@") {
 		defRetHost = fmt.Sprintf("%s@%s", effectiveUser, host)
+	}
+
+	if lookupHost == "127.0.0.1" || lookupHost == "localhost" || lookupHost == "::1" || lookupHost == "0.0.0.0" {
+		return defRetHost, port, "Local Loopback", 0.0
 	}
 
 	// 2. Check local network context: If local device has no Wi-Fi/Ethernet, skip LAN probe immediately (0ms cost)

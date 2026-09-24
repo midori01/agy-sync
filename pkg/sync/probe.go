@@ -176,7 +176,7 @@ func CopyFile(src, dst string) error {
 	}
 
 	_ = os.MkdirAll(filepath.Dir(dst), 0755)
-	tmpDst := dst + fmt.Sprintf(".tmp_%d", time.Now().UnixNano())
+	tmpDst := fmt.Sprintf("%s.tmp_%d_%s", dst, time.Now().UnixNano(), config.RandomToken(3))
 	out, err := os.OpenFile(tmpDst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, srcStat.Mode())
 	if err != nil {
 		return err
@@ -200,5 +200,9 @@ func CopyFile(src, dst string) error {
 	}
 
 	_ = os.Chmod(tmpDst, srcStat.Mode())
-	return os.Rename(tmpDst, dst)
+	if err := os.Rename(tmpDst, dst); err != nil {
+		_ = os.Remove(tmpDst)
+		return err
+	}
+	return nil
 }

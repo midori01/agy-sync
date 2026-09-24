@@ -28,6 +28,7 @@ func GetSSHCmd(host string, port int, cmd string, batch bool, connectTimeout ...
 		to = connectTimeout[0]
 	}
 
+	_ = os.MkdirAll(config.SocketDir, 0700)
 	args := []string{
 		"-p", strconv.Itoa(port),
 		"-o", fmt.Sprintf("ConnectTimeout=%d", to),
@@ -107,6 +108,9 @@ func ShellEscape(s string) string {
 
 // CleanupStaleControlSockets checks all master sockets in SocketDir concurrently and removes dead ones.
 func CleanupStaleControlSockets() {
+	if fi, err := os.Stat(config.SocketDir); err != nil || !fi.IsDir() {
+		return
+	}
 	entries, err := os.ReadDir(config.SocketDir)
 	if err != nil {
 		return
@@ -716,10 +720,28 @@ func HandleSSHCommand(rawArgs []string) {
 		sshBin = "ssh"
 	}
 
+	hasExplicitPort := false
+	for i, a := range preArgs {
+		if a == "-p" && i+1 < len(preArgs) {
+			hasExplicitPort = true
+			break
+		}
+	}
+	if !hasExplicitPort {
+		for i, a := range postArgs {
+			if a == "-p" && i+1 < len(postArgs) {
+				hasExplicitPort = true
+				break
+			}
+		}
+	}
+
 	sshArgs := []string{"ssh"}
 	sshArgs = append(sshArgs, preArgs...)
+	if !hasExplicitPort {
+		sshArgs = append(sshArgs, "-p", strconv.Itoa(effectivePort))
+	}
 	sshArgs = append(sshArgs,
-		"-p", strconv.Itoa(effectivePort),
 		"-o", "StrictHostKeyChecking=no",
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "LogLevel=ERROR",

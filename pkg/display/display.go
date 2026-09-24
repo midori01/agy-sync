@@ -39,6 +39,17 @@ type DeviceDisplayItem struct {
 	Alias    string
 }
 
+func truncateVisual(s string, maxW int) string {
+	if terminal.StrWidth(s) <= maxW {
+		return s
+	}
+	runes := []rune(s)
+	for len(runes) > 0 && terminal.StrWidth(string(runes)) > maxW {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes)
+}
+
 func ShowDevices(verbose bool) {
 	registry := config.LoadRegistry()
 	localIdType, localIdVal := config.GetLocalIdentity()
@@ -242,12 +253,9 @@ func ShowDevices(verbose bool) {
 
 		if isLocal {
 			role = "Local"
-			nodeDisp = fmt.Sprintf("%s ⚡", name)
 			statusStr = "🟢 Active"
-			hwVal = localIdVal
-			if len(hwVal) > 9 {
-				hwVal = hwVal[:9]
-			}
+			hwVal = truncateVisual(localIdVal, 9)
+			nodeDisp = fmt.Sprintf("%s ⚡", truncateVisual(name, 7))
 			pingStr = "—"
 			routeDisp = "Loopback"
 			uDisp := userStr
@@ -279,10 +287,10 @@ func ShowDevices(verbose bool) {
 		} else {
 			if isDefault {
 				role = "Default"
-				nodeDisp = fmt.Sprintf("%s ⭐", name)
+				nodeDisp = fmt.Sprintf("%s ⭐", truncateVisual(name, 7))
 			} else {
 				role = "Peer"
-				nodeDisp = name
+				nodeDisp = truncateVisual(name, 10)
 			}
 
 			pEntry, ok := probeResults[ep]
@@ -322,10 +330,7 @@ func ShowDevices(verbose bool) {
 
 			if pEntry.Probe.Online {
 				statusStr = "🟢 Online"
-				hwVal = pEntry.Probe.Hardware
-				if len(hwVal) > 9 {
-					hwVal = hwVal[:9]
-				}
+				hwVal = truncateVisual(pEntry.Probe.Hardware, 9)
 				if strings.Contains(pEntry.Route.RouteTier, "LAN") {
 					routeDisp = "⚡ LAN Direct"
 					if 0 < pEntry.Route.RouteLat && pEntry.Route.RouteLat < 100 {
@@ -361,9 +366,7 @@ func ShowDevices(verbose bool) {
 				if hwVal == "" {
 					hwVal = "unknown"
 				}
-				if len(hwVal) > 9 {
-					hwVal = hwVal[:9]
-				}
+				hwVal = truncateVisual(hwVal, 9)
 			}
 
 			rawHw := pEntry.Probe.Hardware

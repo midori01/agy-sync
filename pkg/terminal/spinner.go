@@ -55,9 +55,6 @@ func (s *Spinner) SetStatus(sub string) {
 }
 
 func (s *Spinner) Start() {
-	if !s.isEnabled {
-		return
-	}
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()
@@ -66,6 +63,10 @@ func (s *Spinner) Start() {
 	s.running = true
 	s.t0 = time.Now()
 	s.lastLineLen = 0
+	if !s.isEnabled {
+		s.mu.Unlock()
+		return
+	}
 	s.stopChan = make(chan struct{})
 	s.doneChan = make(chan struct{})
 	s.mu.Unlock()
@@ -109,21 +110,31 @@ func (s *Spinner) Stop(finalLine ...string) {
 	s.mu.Lock()
 	if !s.running {
 		s.mu.Unlock()
+		if len(finalLine) > 0 && finalLine[0] != "" {
+			cleanLine := ansiRegex.ReplaceAllString(finalLine[0], "")
+			fmt.Println(cleanLine)
+		}
 		return
 	}
 	s.running = false
-	close(s.stopChan)
+	if s.isEnabled {
+		close(s.stopChan)
+	}
 	s.mu.Unlock()
 
-	select {
-	case <-s.doneChan:
-	case <-time.After(300 * time.Millisecond):
-	}
-
 	if s.isEnabled {
+		select {
+		case <-s.doneChan:
+		case <-time.After(300 * time.Millisecond):
+		}
 		fmt.Print("\r\033[K")
 		if len(finalLine) > 0 && finalLine[0] != "" {
 			fmt.Println(finalLine[0])
+		}
+	} else {
+		if len(finalLine) > 0 && finalLine[0] != "" {
+			cleanLine := ansiRegex.ReplaceAllString(finalLine[0], "")
+			fmt.Println(cleanLine)
 		}
 	}
 }

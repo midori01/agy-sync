@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"fmt"
 	"os/exec"
 )
 
@@ -33,6 +34,9 @@ func RunPipedCommands(producer *exec.Cmd, consumer *exec.Cmd) error {
 	}
 	producerErr := producer.Wait()
 
+	if consumerErr != nil && producerErr != nil {
+		return fmt.Errorf("consumer: %v; producer: %v", consumerErr, producerErr)
+	}
 	if consumerErr != nil {
 		return consumerErr
 	}

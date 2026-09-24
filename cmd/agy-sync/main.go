@@ -154,15 +154,27 @@ func main() {
 		return
 	case "push-settings", "settings":
 		target := ""
-		if len(args) >= 2 {
-			target = args[1]
+		for _, a := range args[1:] {
+			if a == "-h" || a == "--help" {
+				sync.PushSettingsToPeers("-h")
+				return
+			}
+			if !strings.HasPrefix(a, "-") && target == "" {
+				target = a
+			}
 		}
 		sync.PushSettingsToPeers(target)
 		return
 	case "push-pool", "push-accounts", "pool-push":
 		target := ""
-		if len(args) >= 2 {
-			target = args[1]
+		for _, a := range args[1:] {
+			if a == "-h" || a == "--help" {
+				sync.PushPoolToPeers("-h")
+				return
+			}
+			if !strings.HasPrefix(a, "-") && target == "" {
+				target = a
+			}
 		}
 		sync.PushPoolToPeers(target)
 		return
@@ -176,9 +188,9 @@ func main() {
 		sync.SyncAllPeers(verbose)
 		return
 	case "alias", "rename":
-		if len(args) < 2 {
-			fmt.Println("Usage: agy-sync alias <old_alias> [new_alias]")
-			os.Exit(1)
+		if len(args) < 2 || args[1] == "-h" || args[1] == "--help" {
+			fmt.Println("Usage: agy-sync alias <old_alias> [new_alias]\n       agy-sync rename <old_alias> [new_alias]\n\nIf [new_alias] is omitted, resets the device's alias to its native hostname.")
+			return
 		}
 		oldTarget := args[1]
 		newAlias := ""
@@ -192,13 +204,17 @@ func main() {
 		}
 		return
 	case "unalias", "reset-alias":
-		if len(args) < 2 {
-			fmt.Println("Usage: agy-sync unalias <alias>")
-			os.Exit(1)
+		if len(args) < 2 || args[1] == "-h" || args[1] == "--help" {
+			fmt.Println("Usage: agy-sync unalias <alias>\n       agy-sync reset-alias <alias>")
+			return
 		}
 		cluster.ResetAlias(args[1], true)
 		return
 	case "self", "set-self":
+		if len(args) >= 2 && (args[1] == "-h" || args[1] == "--help") {
+			fmt.Println("Usage: agy-sync self [new_name]\n       agy-sync set-self [new_name]\n\nSet local device cluster name. If omitted, resets to local native hostname.")
+			return
+		}
 		if len(args) < 2 || strings.TrimSpace(args[1]) == "" {
 			cluster.ResetAlias("self", true)
 		} else {
@@ -211,6 +227,19 @@ func main() {
 			}
 		}
 		return
+	case "default":
+		if len(args) < 2 || args[1] == "-h" || args[1] == "--help" {
+			fmt.Println("Usage: agy-sync default <alias>\n\nSets the default synchronization target peer.")
+			return
+		}
+		ok, msg := cluster.SetDefaultDevice(args[1])
+		if ok {
+			fmt.Printf("[✅] %s\n", msg)
+		} else {
+			fmt.Printf("[❌] %s\n", msg)
+			os.Exit(1)
+		}
+		return
 	case "enroll", "deploy":
 		sync.CmdEnroll(args[1:])
 		return
@@ -219,7 +248,13 @@ func main() {
 		return
 	case "device":
 		if len(args) < 2 || strings.EqualFold(args[1], "list") || strings.EqualFold(args[1], "show") {
-			display.ShowDevices(false)
+			verbose := false
+			for _, a := range args[1:] {
+				if a == "-v" || a == "-V" || a == "--verbose" {
+					verbose = true
+				}
+			}
+			display.ShowDevices(verbose)
 			return
 		}
 		subCmd := strings.ToLower(args[1])
@@ -323,11 +358,15 @@ func main() {
 			} else if a == "--save" {
 				saveTarget = true
 				i++
-			} else if (a == "-p" || a == "--port") && i+1 < len(args) {
-				if p, err := strconv.Atoi(args[i+1]); err == nil {
-					customPort = p
+			} else if a == "-p" || a == "--port" {
+				if i+1 < len(args) {
+					if p, err := strconv.Atoi(args[i+1]); err == nil && p > 0 && p <= 65535 {
+						customPort = p
+					}
+					i += 2
+				} else {
+					i++
 				}
-				i += 2
 			} else {
 				cleanArgs = append(cleanArgs, a)
 				i++

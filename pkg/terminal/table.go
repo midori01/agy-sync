@@ -95,10 +95,14 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 
 	leftMeta := fmt.Sprintf("Route: %s%s", routeTier, latStr)
 	rightMeta := fmt.Sprintf("Duration: %.2fs · Skew: %s%.3fs", res.Elapsed, skewSign, res.ClockSkew)
-	maxLeft := innerW - StrWidth(rightMeta) - 2
-	if maxLeft < 10 {
-		maxLeft = 10
+	if StrWidth(rightMeta) > innerW-12 {
+		runes := []rune(rightMeta)
+		for len(runes) > 0 && StrWidth(string(runes)+"...") > innerW-12 {
+			runes = runes[:len(runes)-1]
+		}
+		rightMeta = string(runes) + "..."
 	}
+	maxLeft := innerW - StrWidth(rightMeta) - 1
 	if StrWidth(leftMeta) > maxLeft {
 		runes := []rune(leftMeta)
 		for len(runes) > 0 && StrWidth(string(runes)+"...") > maxLeft {
@@ -107,8 +111,8 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 		leftMeta = string(runes) + "..."
 	}
 	spaceMeta := innerW - StrWidth(leftMeta) - StrWidth(rightMeta)
-	if spaceMeta < 1 {
-		spaceMeta = 1
+	if spaceMeta < 0 {
+		spaceMeta = 0
 	}
 	metaRow := fmt.Sprintf("│ %s%s%s │", leftMeta, strings.Repeat(" ", spaceMeta), rightMeta)
 
@@ -130,10 +134,14 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 		for _, ch := range res.Changes {
 			lStr := fmt.Sprintf("%s %s", ch.Icon, ch.Name)
 			desc := ch.Desc
-			maxDesc := innerW - StrWidth(lStr) - 2
-			if maxDesc < 10 {
-				maxDesc = 10
+			if StrWidth(lStr) > innerW/2 {
+				runes := []rune(lStr)
+				for len(runes) > 0 && StrWidth(string(runes)+"...") > innerW/2 {
+					runes = runes[:len(runes)-1]
+				}
+				lStr = string(runes) + "..."
 			}
+			maxDesc := innerW - StrWidth(lStr) - 1
 			if StrWidth(desc) > maxDesc {
 				runes := []rune(desc)
 				for len(runes) > 0 && StrWidth(string(runes)+"...") > maxDesc {
@@ -142,8 +150,8 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 				desc = string(runes) + "..."
 			}
 			sp := innerW - StrWidth(lStr) - StrWidth(desc)
-			if sp < 1 {
-				sp = 1
+			if sp < 0 {
+				sp = 0
 			}
 			lines = append(lines, fmt.Sprintf("│ %s%s%s │", lStr, strings.Repeat(" ", sp), desc))
 		}

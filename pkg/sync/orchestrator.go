@@ -342,7 +342,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	}
 	if hasToken {
 		tokStat := SyncSingleFile(config.OAuthTokenFile, remToken, host, port, "antigravity-oauth-token", clockSkew, probeCache, "600")
-		recordAsset("Antigravity Token", tokStat, "🎟️", tokStat == "pushed" || tokStat == "pulled")
+		recordAsset("Antigravity Token", tokStat, "🎫", tokStat == "pushed" || tokStat == "pulled")
 	}
 
 	// 3.7 Sync Account Pool Config
@@ -372,7 +372,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	}
 	if hasSettings {
 		setStat := SyncSingleFile(config.SettingsFile, remSettings, host, port, "settings.json", clockSkew, probeCache, "600")
-		recordAsset("CLI Settings", setStat, "⚙️", setStat == "pushed" || setStat == "pulled")
+		recordAsset("CLI Settings", setStat, "🔧", setStat == "pushed" || setStat == "pulled")
 	}
 
 	if _, err := os.Stat(config.ProtoSummariesFile); err == nil {
@@ -383,7 +383,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	// 5. Sync Conversation Summaries
 	stepStatus("Conversation index")
 	sumsStat := SyncConversationSummaries(host, port, clockSkew, remHome)
-	recordAsset("Conversation Index", sumsStat, "🗂️", strings.Contains(sumsStat, "pushed") || strings.Contains(sumsStat, "pulled") || strings.Contains(sumsStat, "merged"))
+	recordAsset("Conversation Index", sumsStat, "📑", strings.Contains(sumsStat, "pushed") || strings.Contains(sumsStat, "pulled") || strings.Contains(sumsStat, "merged"))
 
 	// 6. Sync Conversation Databases
 	stepStatus("Conversation databases")
@@ -403,7 +403,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	if annChanged {
 		annDesc = fmt.Sprintf("+%d pushed, +%d pulled", annPushed, annPulled)
 	}
-	recordAsset("Conversation Annotations", annDesc, "🏷️", annChanged)
+	recordAsset("Conversation Annotations", annDesc, "🔖", annChanged)
 
 	// 8. Sync Brain Artifacts & Transcripts
 	stepStatus("Brain transcripts & artifacts")
@@ -428,7 +428,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	if cfgChanged {
 		cfgDesc = fmt.Sprintf("+%d pushed, +%d pulled", cfgPushed, cfgPulled)
 	}
-	recordAsset("Skills & Configs", cfgDesc, "🛠️", cfgChanged)
+	recordAsset("Skills & Configs", cfgDesc, "🧰", cfgChanged)
 
 	stepStatus("Finalizing")
 	elapsed := math.Round(time.Since(t0).Seconds()*100) / 100.0
@@ -563,8 +563,16 @@ func SyncAllPeers(verbose bool) {
 		if !lanI && lanJ {
 			return false
 		}
-		if probedRoutes[i].RouteLat != probedRoutes[j].RouteLat {
-			return probedRoutes[i].RouteLat < probedRoutes[j].RouteLat
+		latI := probedRoutes[i].RouteLat
+		latJ := probedRoutes[j].RouteLat
+		if latI > 0 && latJ > 0 && latI != latJ {
+			return latI < latJ
+		}
+		if latI > 0 && latJ == 0 {
+			return true
+		}
+		if latI == 0 && latJ > 0 {
+			return false
 		}
 		return probedRoutes[i].Name < probedRoutes[j].Name
 	})
@@ -654,8 +662,16 @@ func SyncAllPeers(verbose bool) {
 		if !lanI && lanJ {
 			return false
 		}
-		if results[i].RouteLat > 0 && results[j].RouteLat > 0 && results[i].RouteLat != results[j].RouteLat {
-			return results[i].RouteLat < results[j].RouteLat
+		latI := results[i].RouteLat
+		latJ := results[j].RouteLat
+		if latI > 0 && latJ > 0 && latI != latJ {
+			return latI < latJ
+		}
+		if latI > 0 && latJ == 0 {
+			return true
+		}
+		if latI == 0 && latJ > 0 {
+			return false
 		}
 		return results[i].PeerName < results[j].PeerName
 	})
@@ -723,7 +739,7 @@ Arguments:
 		return
 	}
 
-	fmt.Printf("[⚙️] Pushing local settings.json to %d peer(s)...\n", len(peersToPush))
+	fmt.Printf("[🔧] Pushing local settings.json to %d peer(s)...\n", len(peersToPush))
 	spinner := terminal.NewSpinner(fmt.Sprintf("Pushing settings.json baseline across %d peer(s)", len(peersToPush)), true)
 	spinner.Start()
 

@@ -31,6 +31,9 @@ func ValidateAlias(alias string) (bool, string) {
 	if !config.SafeAliasRegex.MatchString(a) {
 		return false, "Alias may only contain letters, digits, '.', '-', and '_'."
 	}
+	if strings.HasPrefix(a, "-") || strings.HasPrefix(a, ".") || strings.HasSuffix(a, "-") || strings.HasSuffix(a, ".") {
+		return false, "Alias cannot begin or end with '-' or '.'."
+	}
 	if config.ReservedAliases[a] {
 		return false, fmt.Sprintf("'%s' is a reserved keyword and cannot be used as an alias.", a)
 	}
@@ -62,7 +65,12 @@ func GetUniqueAlias(baseAlias, endpoint string, reg config.Registry) string {
 
 	idx := 2
 	for {
-		cand := fmt.Sprintf("%s-%d", prefix, idx)
+		suffix := fmt.Sprintf("-%d", idx)
+		candBase := prefix
+		if len(candBase)+len(suffix) > 32 {
+			candBase = candBase[:32-len(suffix)]
+		}
+		cand := candBase + suffix
 		found := false
 		for ep, d := range reg {
 			if ep != endpoint && !d.Deleted && strings.EqualFold(d.Alias, cand) {
@@ -527,7 +535,7 @@ func BroadcastRegistryToOnlinePeers(showSpinner ...bool) map[string]bool {
 		wg.Add(1)
 		go func(target DeviceTarget) {
 			defer wg.Done()
-			cmdStr := fmt.Sprintf("%s mkdir -p ~/.gemini && cat > ~/.gemini/devices.json.tmp && mv -f ~/.gemini/devices.json.tmp ~/.gemini/devices.json && (agy-sync refresh-registry 2>/dev/null || true)", config.PathPrefix)
+			cmdStr := fmt.Sprintf("%s mkdir -p ~/.gemini && tmp=~/.gemini/devices.json.tmp_%d_%s && { cat > \"$tmp\" && mv -f \"$tmp\" ~/.gemini/devices.json; } || (rm -f \"$tmp\" 2>/dev/null; false); (agy-sync refresh-registry 2>/dev/null || true)", config.PathPrefix, time.Now().UnixNano(), config.RandomToken(3))
 			sshArgs := ssh.GetSSHCmd(target.TargetSSH, target.Port, cmdStr, true)
 			proc := exec.Command("ssh", sshArgs...)
 			proc.Stdin = strings.NewReader(string(regData))
@@ -561,7 +569,7 @@ func BroadcastAuthorizedKeyToOnlinePeers(pubkey string) {
 			wg.Add(1)
 			go func(d DeviceTarget) {
 				defer wg.Done()
-				cmd := "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+				cmd := "mkdir -p ~/.ssh && chmod 700 ~/.ssh && tmp=~/.ssh/auth_tmp_$$ && { cat > \"$tmp\" && cat ~/.ssh/authorized_keys \"$tmp\" 2>/dev/null | sort -u > \"$tmp.merged\" && mv -f \"$tmp.merged\" ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys; } || true; rm -f \"$tmp\" \"$tmp.merged\" 2>/dev/null"
 				_, _, _, _ = ssh.RunSSHCmdWithStdin(d.TargetSSH, d.Port, cmd, strings.NewReader(pubkey+"\n"), false)
 			}(dev)
 		}

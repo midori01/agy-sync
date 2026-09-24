@@ -143,9 +143,10 @@ for cid in all_ids:
             merged_rows[cid] = local_rows[cid]
 
 def write_db(db_path, rows):
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30.0)
     cur = conn.cursor()
     cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=5000")
     for r in rows.values():
         keys = list(r.keys())
         placeholders = ', '.join(['?'] * len(keys))
@@ -162,7 +163,7 @@ if remote_changed or not rem_snap:
     tmp_out.close()
     write_db(tmp_out.name, merged_rows)
     rem_dir = os.path.dirname(rem_db)
-    push_ssh = ["ssh", "-p", "%d", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ControlMaster=auto", "-o", "ControlPath=%s/cm-%%C", "-o", "ControlPersist=60s", "%s", f"mkdir -p '{rem_dir}' && (cat > '{rem_db}.tmp' && mv -f '{rem_db}.tmp' '{rem_db}' || (rm -f '{rem_db}.tmp' 2>/dev/null; false))"]
+    push_ssh = ["ssh", "-p", "%d", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ControlMaster=auto", "-o", "ControlPath=%s/cm-%%C", "-o", "ControlPersist=60s", "%s", f"mkdir -p '{rem_dir}' && tmp='{rem_db}.tmp_$$' && {{ cat > \"$tmp\" && mv -f \"$tmp\" '{rem_db}'; }} || (rm -f \"$tmp\" 2>/dev/null; false)"]
     with open(tmp_out.name, "rb") as f_in:
         subprocess.run(push_ssh, stdin=f_in)
     if os.path.exists(tmp_out.name):
@@ -355,6 +356,16 @@ shutil.rmtree(td, ignore_errors=True)
 		p2 := exec.Command("tar", "-C", config.ConvDir, "--no-same-owner", "-xzf", "-")
 		if err := RunPipedCommands(p1, p2); err == nil {
 			pulledCount = len(toPull)
+		} else {
+			// Fallback: direct tar stream if remote lacks python3
+			inputList := strings.Join(toPull, "\n") + "\n"
+			fbArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -czf - -T -", remConv), true)
+			fb1 := exec.Command("ssh", fbArgs...)
+			fb1.Stdin = strings.NewReader(inputList)
+			fb2 := exec.Command("tar", "-C", config.ConvDir, "--no-same-owner", "-xzf", "-")
+			if err := RunPipedCommands(fb1, fb2); err == nil {
+				pulledCount = len(toPull)
+			}
 		}
 	}
 
@@ -495,6 +506,23 @@ if os.path.isdir(b):
 			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
 			sz, _ := strconv.ParseInt(parts[2], 10, 64)
 			remoteBrains[cleanUUID] = [2]int64{mtime - int64(clockSkew), sz}
+		}
+	}
+
+	if len(remoteBrains) == 0 {
+		fbCmd := fmt.Sprintf("mkdir -p '%s' && find '%s' -mindepth 1 -maxdepth 1 -type d -exec stat -c '%%n\t%%Y\t0' {} + 2>/dev/null", remBrain, remBrain)
+		fbOut, _, _, _ := ssh.RunSSHCmd(host, port, fbCmd, false)
+		for _, line := range strings.Split(fbOut, "\n") {
+			parts := strings.Split(line, "\t")
+			if len(parts) >= 3 {
+				rawUUID := filepath.Base(strings.TrimSpace(parts[0]))
+				cleanUUID := filepath.Clean(rawUUID)
+				if cleanUUID == "" || cleanUUID == "." || cleanUUID == ".." || strings.Contains(cleanUUID, "/") || strings.Contains(cleanUUID, "\\") {
+					continue
+				}
+				mtime, _ := strconv.ParseInt(parts[1], 10, 64)
+				remoteBrains[cleanUUID] = [2]int64{mtime - int64(clockSkew), 0}
+			}
 		}
 	}
 

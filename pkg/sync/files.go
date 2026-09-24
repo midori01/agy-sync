@@ -82,6 +82,12 @@ func SyncSingleFile(localPath, remotePath, host string, port int, name string, c
 	}
 
 	normalizedRemoteMTime := remoteMTime - int64(clockSkew)
+	// Guard against pushing empty 0-byte file over existing non-empty remote file
+	if localExists && fi.Size() == 0 && remoteExists && remoteSize > 0 {
+		// Remote has data while local is empty: force pull to prevent data loss
+		normalizedRemoteMTime = localMTime + 9999
+	}
+
 	if localExists && (!remoteExists || localMTime >= normalizedRemoteMTime) {
 		remoteParent := filepath.Dir(remotePath)
 		tmpRemote := fmt.Sprintf("%s.tmp_push_%d_%s", remotePath, time.Now().UnixNano(), randomToken(3))
@@ -436,6 +442,18 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 
 	_ = filepath.Walk(config.ConfigDir, func(path string, info os.FileInfo, err error) error {
 		if err == nil && !info.IsDir() {
+			if info.Mode()&os.ModeSymlink != 0 {
+				target, err := os.Readlink(path)
+				if err == nil {
+					targetAbs := target
+					if !filepath.IsAbs(targetAbs) {
+						targetAbs = filepath.Join(filepath.Dir(path), target)
+					}
+					if !strings.HasPrefix(filepath.Clean(targetAbs), config.ConfigDir) {
+						return nil
+					}
+				}
+			}
 			rel, _ := filepath.Rel(config.ConfigDir, path)
 			localFiles[rel] = [2]int64{info.ModTime().Unix(), info.Size()}
 		}
@@ -628,13 +646,20 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 			res[k] = v
 		}
 
+		normalizeTime := func(t float64) float64 {
+			if t > 1e11 {
+				return t / 1000.0
+			}
+			return t
+		}
+
 		// 1. Identify which side has newer OAuth token credentials
 		getTokenTime := func(m map[string]interface{}) float64 {
 			if v, ok := m["updated_at"].(float64); ok && v > 0 {
-				return v
+				return normalizeTime(v)
 			}
 			if v, ok := m["token_expiry"].(float64); ok && v > 0 {
-				return v
+				return normalizeTime(v)
 			}
 			return 0
 		}
@@ -651,7 +676,7 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 		getQuotaTime := func(m map[string]interface{}) float64 {
 			if q, ok := m["last_quota"].(map[string]interface{}); ok {
 				if u, ok := q["updated_at"].(float64); ok && u > 0 {
-					return u
+					return normalizeTime(u)
 				}
 			}
 			return 0
@@ -666,6 +691,9 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 		getIntVal := func(m map[string]interface{}, key string) int64 {
 			if v, ok := m[key]; ok {
 				if f, ok := v.(float64); ok {
+					if (key == "last_used_at" || key == "created_at") && f > 1e11 {
+						f = f / 1000.0
+					}
 					return int64(f)
 				}
 			}
@@ -1004,7 +1032,7 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 
 	// 1. Initial adoption: local doesn't have it, remote does -> pull
 	if !localHasGo && remoteHasGo {
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' -czf - agy-sync-go", remHome), true)
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' --exclude=.git/index.lock -czf - agy-sync-go", remHome), true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
 		if err := RunPipedCommands(p1, p2); err == nil {
@@ -1015,7 +1043,7 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 
 	// 2. Initial deployment: local has it, remote does not -> push
 	if localHasGo && !remoteHasGo {
-		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "-czf", "-", "agy-sync-go")
+		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		if err := RunPipedCommands(p1, p2); err == nil {
@@ -1082,7 +1110,7 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 	}
 
 	if shouldPush {
-		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "-czf", "-", "agy-sync-go")
+		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		if err := RunPipedCommands(p1, p2); err == nil {
@@ -1091,7 +1119,7 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 		return "failed"
 	} else {
 		// Remote is newer: pull from remote
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' -czf - agy-sync-go", remHome), true)
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' --exclude=.git/index.lock -czf - agy-sync-go", remHome), true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
 		if err := RunPipedCommands(p1, p2); err == nil {

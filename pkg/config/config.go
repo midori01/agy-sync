@@ -2,6 +2,7 @@ package config
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -47,7 +48,7 @@ var (
 )
 
 var (
-	Version   = "7.6"
+	Version   = "8.0"
 	GitCommit = "dev"
 )
 
@@ -69,6 +70,7 @@ var ReservedAliases = map[string]bool{
 	"reconcile": true, "refresh-registry": true, "version": true, "probe-lan": true,
 	"push-settings": true, "settings": true, "is-peer": true,
 	"push-pool": true, "push-accounts": true, "pool-push": true,
+	"default": true, "config": true, "save": true, "status": true, "ps": true,
 }
 
 var (
@@ -166,15 +168,9 @@ func LoadConfig() IniConfig {
 }
 
 func SaveConfig(cfg IniConfig) error {
-	_ = os.MkdirAll(filepath.Dir(ConfFile), 0755)
-	tmpPath := ConfFile + fmt.Sprintf(".tmp_%d", time.Now().UnixNano())
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmpPath)
+	var buf bytes.Buffer
+	w := bufio.NewWriter(&buf)
 
-	w := bufio.NewWriter(f)
 	// Order sections standardly
 	orderedSections := []string{"local", "sync", "devices", "cluster"}
 	written := make(map[string]bool)
@@ -201,10 +197,7 @@ func SaveConfig(cfg IniConfig) error {
 	}
 
 	_ = w.Flush()
-	_ = f.Sync()
-	_ = f.Close()
-
-	return os.Rename(tmpPath, ConfFile)
+	return WriteFileAtomic(ConfFile, buf.Bytes(), 0600)
 }
 
 func LoadRegistry() Registry {
@@ -478,12 +471,17 @@ func GetLocalIPs(forceRefresh bool) map[string]bool {
 		// C. ip -o addr show
 		for _, cmdArgs := range [][]string{{"ip", "-o", "addr", "show"}, {"/system/bin/ip", "-o", "addr", "show"}} {
 			if out, err := exec.Command(cmdArgs[0], cmdArgs[1:]...).Output(); err == nil {
+				found := false
 				for _, line := range strings.Split(string(out), "\n") {
 					fields := strings.Fields(line)
 					if len(fields) >= 4 && strings.Contains(fields[3], "/") {
 						ip := strings.Split(fields[3], "/")[0]
 						ips[ip] = true
+						found = true
 					}
+				}
+				if found {
+					break
 				}
 			}
 		}
@@ -751,7 +749,8 @@ func EnsureSelfUpToDate() {
 	}
 
 	ldflags := fmt.Sprintf("-s -w -X agy-sync/pkg/config.GitCommit=%s", expectedCommit)
-	tmpBin := AgySyncScript + fmt.Sprintf(".tmp_self_%d", time.Now().UnixNano())
+	_ = os.MkdirAll(filepath.Dir(AgySyncScript), 0755)
+	tmpBin := fmt.Sprintf("%s.tmp_self_%d_%s", AgySyncScript, time.Now().UnixNano(), RandomToken(3))
 	cmd := exec.Command("go", "build", "-trimpath", fmt.Sprintf("-ldflags=%s", ldflags), "-o", tmpBin, "./cmd/agy-sync")
 	cmd.Dir = AgySyncGoDir
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", fmt.Sprintf("GOARCH=%s", runtime.GOARCH))

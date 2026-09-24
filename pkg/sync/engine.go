@@ -58,7 +58,11 @@ func GetOrBuildTargetBinary(targetArch string) ([]byte, error) {
 	}
 
 	_ = os.WriteFile(stampFile, []byte(config.GitCommit), 0644)
-	return os.ReadFile(cachedBin)
+	data, err := os.ReadFile(cachedBin)
+	if err != nil || len(data) == 0 {
+		return nil, fmt.Errorf("built binary for %s is empty or unreadable: %v", normArch, err)
+	}
+	return data, nil
 }
 
 // PullRemoteBinaryForLocal retrieves the matching native binary from the remote node
@@ -146,6 +150,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 
 		// B. Fallback for devices WITHOUT Go compiler: pull ready binary from remote!
 		if binData, err := PullRemoteBinaryForLocal(host, port, remHome, remArch, remCommit); err == nil && len(binData) > 0 {
+			_ = os.MkdirAll(filepath.Dir(config.AgySyncScript), 0755)
 			tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.AgySyncScript, time.Now().UnixNano(), randomToken(3))
 			if err := os.WriteFile(tmpLocal, binData, 0755); err == nil {
 				_ = os.Rename(tmpLocal, config.AgySyncScript)
@@ -153,6 +158,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 				config.GitCommit = remCommit
 				return "pulled binary from peer"
 			}
+			_ = os.Remove(tmpLocal)
 		}
 
 		return "pulled"
@@ -204,15 +210,18 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 	tmpRem := fmt.Sprintf("%s.tmp_%d_%s", remBin, time.Now().UnixNano(), randomToken(3))
 	remTargetMTime := fi.ModTime().Unix() + int64(clockSkew)
 
-	pushCmd := fmt.Sprintf(`mkdir -p '%s' && (cat > '%s' && chmod 755 '%s' && `+
+	pushCmd := fmt.Sprintf(`mkdir -p '%s' && (`+
+		`cat > '%s' && chmod 755 '%s' && `+
 		`(touch -d @%d '%s' 2>/dev/null || true) && `+
 		`mv -f '%s' '%s' && `+
 		`(touch -d @%d '%s' 2>/dev/null || true) && `+
-		`mkdir -p '%s/.local/bin' 2>/dev/null && ln -sf '%s' '%s/.local/bin/agy-sync' 2>/dev/null || true; `+
-		`if [ -w /usr/local/bin ] || [ "$(id -u)" -eq 0 ]; then ln -sf '%s' /usr/local/bin/agy-sync 2>/dev/null || true; `+
+		`{ mkdir -p '%s/.local/bin' 2>/dev/null && ln -sf '%s' '%s/.local/bin/agy-sync' 2>/dev/null || true; } && `+
+		`{ if [ -w /usr/local/bin ] || [ "$(id -u)" -eq 0 ]; then ln -sf '%s' /usr/local/bin/agy-sync 2>/dev/null || true; `+
 		`elif command -v sudo >/dev/null 2>&1; then sudo -n ln -sf '%s' /usr/local/bin/agy-sync 2>/dev/null || true; `+
-		`elif [ -d /data/data/com.termux/files/usr/bin ]; then ln -sf '%s' /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true; fi || (rm -f '%s' 2>/dev/null; false))`,
-		remParent, tmpRem, tmpRem,
+		`elif [ -d /data/data/com.termux/files/usr/bin ]; then ln -sf '%s' /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true; fi; }`+
+		`) || (rm -f '%s' 2>/dev/null; false)`,
+		remParent,
+		tmpRem, tmpRem,
 		remTargetMTime, tmpRem,
 		tmpRem, remBin,
 		remTargetMTime, remBin,
