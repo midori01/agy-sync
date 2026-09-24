@@ -659,6 +659,9 @@ func EnsureTermuxEnvironment() {
 }
 
 func EnsureSelfUpToDate() {
+	if _, err := exec.LookPath("go"); err != nil {
+		return
+	}
 	if fi, err := os.Stat(AgySyncGoDir); err != nil || !fi.IsDir() {
 		return
 	}
