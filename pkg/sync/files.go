@@ -622,6 +622,109 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 		return string(b)
 	}
 
+	mergeAccount := func(a, b map[string]interface{}) map[string]interface{} {
+		res := make(map[string]interface{})
+		for k, v := range a {
+			res[k] = v
+		}
+
+		// 1. Identify which side has newer OAuth token credentials
+		getTokenTime := func(m map[string]interface{}) float64 {
+			if v, ok := m["updated_at"].(float64); ok && v > 0 {
+				return v
+			}
+			if v, ok := m["token_expiry"].(float64); ok && v > 0 {
+				return v
+			}
+			return 0
+		}
+		if getTokenTime(b) > getTokenTime(a) {
+			tokenKeys := []string{"access_token", "refresh_token", "id_token", "token_expiry", "updated_at"}
+			for _, tk := range tokenKeys {
+				if v, ok := b[tk]; ok {
+					res[tk] = v
+				}
+			}
+		}
+
+		// 2. Identify which side has newer quota telemetry (last_quota)
+		getQuotaTime := func(m map[string]interface{}) float64 {
+			if q, ok := m["last_quota"].(map[string]interface{}); ok {
+				if u, ok := q["updated_at"].(float64); ok && u > 0 {
+					return u
+				}
+			}
+			return 0
+		}
+		if getQuotaTime(b) > getQuotaTime(a) {
+			if qb, ok := b["last_quota"]; ok {
+				res["last_quota"] = qb
+			}
+		}
+
+		// 3. Usage Telemetry: monotonic max
+		getIntVal := func(m map[string]interface{}, key string) int64 {
+			if v, ok := m[key]; ok {
+				if f, ok := v.(float64); ok {
+					return int64(f)
+				}
+			}
+			return 0
+		}
+		for _, k := range []string{"gen_count", "request_count", "error_count", "last_used_at"} {
+			vA := getIntVal(a, k)
+			vB := getIntVal(b, k)
+			if vB > vA {
+				res[k] = vB
+			} else if vA > 0 {
+				res[k] = vA
+			}
+		}
+
+		// 4. Rate-limiting & validation status: latest activity wins
+		getLatestActivityTime := func(m map[string]interface{}) float64 {
+			t := getTokenTime(m)
+			if u := float64(getIntVal(m, "last_used_at")); u > t {
+				t = u
+			}
+			if q := getQuotaTime(m); q > t {
+				t = q
+			}
+			return t
+		}
+		if getLatestActivityTime(b) > getLatestActivityTime(a) {
+			for _, sk := range []string{"status", "validation_url", "rate_limited_until"} {
+				if v, ok := b[sk]; ok {
+					res[sk] = v
+				} else {
+					delete(res, sk)
+				}
+			}
+		}
+
+		// 5. Created_at: earliest creation time wins
+		createdA := getIntVal(a, "created_at")
+		createdB := getIntVal(b, "created_at")
+		if createdA > 0 && createdB > 0 {
+			if createdB < createdA {
+				res["created_at"] = createdB
+			} else {
+				res["created_at"] = createdA
+			}
+		} else if createdB > 0 {
+			res["created_at"] = createdB
+		}
+
+		// 6. Name: retain non-empty name
+		if n, ok := res["name"].(string); !ok || strings.TrimSpace(n) == "" {
+			if nb, ok := b["name"].(string); ok && strings.TrimSpace(nb) != "" {
+				res["name"] = nb
+			}
+		}
+
+		return res
+	}
+
 	mergedMap := make(map[string]map[string]interface{})
 	for _, a := range localAccs {
 		k := getAccKey(a)
@@ -632,26 +735,34 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 		if locA, ok := mergedMap[k]; !ok {
 			mergedMap[k] = a
 		} else {
-			// Compare timestamps
-			getTime := func(m map[string]interface{}) float64 {
-				for _, key := range []string{"updated_at", "last_used_at"} {
-					if v, ok := m[key]; ok {
-						if f, ok := v.(float64); ok {
-							return f
-						}
-					}
-				}
-				return 0.0
-			}
-			if getTime(a) > getTime(locA) {
-				mergedMap[k] = a
-			}
+			mergedMap[k] = mergeAccount(locA, a)
+		}
+	}
+
+	// Deterministic array order: preserve local array order first, then append any new remote accounts
+	var orderedKeys []string
+	seenKeys := make(map[string]bool)
+
+	for _, a := range localAccs {
+		k := getAccKey(a)
+		if !seenKeys[k] {
+			seenKeys[k] = true
+			orderedKeys = append(orderedKeys, k)
+		}
+	}
+	for _, a := range remoteAccs {
+		k := getAccKey(a)
+		if !seenKeys[k] {
+			seenKeys[k] = true
+			orderedKeys = append(orderedKeys, k)
 		}
 	}
 
 	var mergedAccs []map[string]interface{}
-	for _, a := range mergedMap {
-		mergedAccs = append(mergedAccs, a)
+	for _, k := range orderedKeys {
+		if a, ok := mergedMap[k]; ok {
+			mergedAccs = append(mergedAccs, a)
+		}
 	}
 
 	// Base template
@@ -664,6 +775,73 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 		mergedPool[k] = v
 	}
 	mergedPool["accounts"] = mergedAccs
+
+	// Merge generation_events if present
+	extractEvents := func(m map[string]interface{}) []map[string]interface{} {
+		var res []map[string]interface{}
+		if m != nil {
+			if list, ok := m["generation_events"].([]interface{}); ok {
+				for _, item := range list {
+					if em, ok := item.(map[string]interface{}); ok {
+						res = append(res, em)
+					}
+				}
+			}
+		}
+		return res
+	}
+
+	locEvents := extractEvents(localData)
+	remEvents := extractEvents(remoteData)
+	if len(locEvents) > 0 || len(remEvents) > 0 {
+		type evKey struct {
+			ID string
+			TS int64
+		}
+		seenEv := make(map[evKey]bool)
+		var allEvents []map[string]interface{}
+		for _, ev := range append(locEvents, remEvents...) {
+			idStr, _ := ev["id"].(string)
+			var tsVal int64
+			if f, ok := ev["ts"].(float64); ok {
+				tsVal = int64(f)
+			}
+			k := evKey{ID: idStr, TS: tsVal}
+			if !seenEv[k] {
+				seenEv[k] = true
+				allEvents = append(allEvents, ev)
+			}
+		}
+		sort.Slice(allEvents, func(i, j int) bool {
+			var tsI, tsJ float64
+			if f, ok := allEvents[i]["ts"].(float64); ok {
+				tsI = f
+			}
+			if f, ok := allEvents[j]["ts"].(float64); ok {
+				tsJ = f
+			}
+			return tsI < tsJ
+		})
+		if len(allEvents) > 1000 {
+			allEvents = allEvents[len(allEvents)-1000:]
+		}
+		mergedPool["generation_events"] = allEvents
+	}
+
+	// Ensure active_account_id is valid
+	validActive := false
+	curActive, _ := mergedPool["active_account_id"].(string)
+	for _, acc := range mergedAccs {
+		if idStr, ok := acc["id"].(string); ok && idStr == curActive {
+			validActive = true
+			break
+		}
+	}
+	if !validActive && len(mergedAccs) > 0 {
+		if firstID, ok := mergedAccs[0]["id"].(string); ok {
+			mergedPool["active_account_id"] = firstID
+		}
+	}
 
 	contentBytes, _ := json.MarshalIndent(mergedPool, "", "  ")
 	contentStr := string(contentBytes) + "\n"
