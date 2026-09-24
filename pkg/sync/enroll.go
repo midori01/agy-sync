@@ -84,7 +84,7 @@ Options:
 	sshTarget := targetSSH
 
 	// 1. Reachability & OS detection probe
-	probeCmd := "echo READY && uname -s && uname -m && uname -n && whoami"
+	probeCmd := "echo READY && uname -s && uname -m && uname -n && whoami && echo \"HOME:$HOME\""
 	stdout, _, _, err := ssh.RunSSHCmd(sshTarget, port, probeCmd, false, 8)
 	if err != nil || !strings.Contains(stdout, "READY") {
 		fmt.Printf("[❌] Cannot establish initial SSH connection to '%s:%d': Host unreachable or key not accepted\n", sshTarget, port)
@@ -107,6 +107,7 @@ Options:
 	if remoteUser == "" {
 		remoteUser = "root"
 	}
+	remHome := ""
 
 	if readyIdx >= 0 {
 		if readyIdx+1 < len(lines) {
@@ -120,6 +121,20 @@ Options:
 		}
 		if readyIdx+4 < len(lines) {
 			remoteUser = strings.TrimSpace(lines[readyIdx+4])
+		}
+	}
+
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if strings.HasPrefix(l, "HOME:") {
+			remHome = strings.TrimSpace(strings.TrimPrefix(l, "HOME:"))
+		}
+	}
+	if remHome == "" {
+		if remoteUser == "root" {
+			remHome = "/root"
+		} else {
+			remHome = fmt.Sprintf("/home/%s", remoteUser)
 		}
 	}
 
@@ -277,8 +292,15 @@ cat ~/.ssh/id_ed25519.pub
 
 	binDir := filepath.Dir(config.AgySyncScript)
 	var targetBinaryData []byte
+	archLower := strings.ToLower(arch)
 	if isRemTermux {
 		if data, err := os.ReadFile(filepath.Join(binDir, "agy-sync-android-arm64")); err == nil {
+			targetBinaryData = data
+		} else {
+			targetBinaryData, _ = os.ReadFile(config.AgySyncScript)
+		}
+	} else if strings.Contains(archLower, "x86_64") || strings.Contains(archLower, "amd64") {
+		if data, err := os.ReadFile(filepath.Join(binDir, "agy-sync-linux-amd64")); err == nil {
 			targetBinaryData = data
 		} else {
 			targetBinaryData, _ = os.ReadFile(config.AgySyncScript)
@@ -307,6 +329,8 @@ fi
 	procEngine := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, deployEngineCmd, true)...)
 	procEngine.Stdin = bytes.NewReader(targetBinaryData)
 	_ = procEngine.Run()
+
+	EnsureCompanionBinaries(sshTarget, port, binDir, fmt.Sprintf("%s/.gemini/antigravity-cli/bin", remHome))
 
 	// 8. Deploy agy-sync-go source & agy-pool Multi-Account Engine
 	if _, err := os.Stat(config.AgySyncGoDir); err == nil {
@@ -475,6 +499,11 @@ if [ ! -f ~/.ssh/id_ed25519.pub ]; then
 fi
 PUB="$(cat ~/.ssh/id_ed25519.pub)"
 HNAME="$(uname -n 2>/dev/null || echo node)"
+ARCH="$(uname -m 2>/dev/null || echo unknown)"
+IS_TERMUX="0"
+if [ -d "/data/data/com.termux" ]; then
+    IS_TERMUX="1"
+fi
 LAN_IPS="$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br)/ {print $4}' | cut -d/ -f1) | tr '\n' ',')"
 
 RESP="$(curl -fsSL --data-urlencode "pubkey=$PUB" --data-urlencode "name=$HNAME" --data-urlencode "lan_ips=$LAN_IPS" "http://%s:%d/exchange/%s")"
@@ -485,8 +514,13 @@ chmod 600 ~/.ssh/authorized_keys
 
 echo "$RESP" | grep "^DEVICES_JSON_B64:" | cut -d: -f2 | base64 -d > ~/.gemini/devices.json
 
-curl -fsSL "http://%s:%d/bin/agy-sync" -o ~/.gemini/antigravity-cli/bin/agy-sync
-chmod +x ~/.gemini/antigravity-cli/bin/agy-sync
+curl -fsSL "http://%s:%d/bin/agy-sync?arch=${ARCH}&termux=${IS_TERMUX}" -o ~/.gemini/antigravity-cli/bin/agy-sync
+curl -fsSL "http://%s:%d/bin/companion/agy-sync-android-arm64" -o ~/.gemini/antigravity-cli/bin/agy-sync-android-arm64 2>/dev/null || true
+curl -fsSL "http://%s:%d/bin/companion/agy-sync-linux-arm64" -o ~/.gemini/antigravity-cli/bin/agy-sync-linux-arm64 2>/dev/null || true
+curl -fsSL "http://%s:%d/bin/companion/agy-sync-linux-amd64" -o ~/.gemini/antigravity-cli/bin/agy-sync-linux-amd64 2>/dev/null || true
+chmod 755 ~/.gemini/antigravity-cli/bin/agy-sync*
+curl -fsSL "http://%s:%d/done" >/dev/null 2>&1 || true
+
 ln -sf ~/.gemini/antigravity-cli/bin/agy-sync ~/.local/bin/agy-sync 2>/dev/null || true
 if [ -d /data/data/com.termux/files/usr/bin ]; then
     ln -sf ~/.gemini/antigravity-cli/bin/agy-sync /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true
@@ -495,7 +529,7 @@ elif [ -w /usr/local/bin ]; then
 fi
 
 echo "[🎉] Successfully joined Antigravity cluster!"
-`, localName, host, port, token, host, port)
+`, localName, host, port, token, host, port, host, port, host, port, host, port, host, port)
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte(script))
 	})
@@ -545,11 +579,16 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 	})
 
 	mux.HandleFunc("/bin/agy-sync", func(w http.ResponseWriter, r *http.Request) {
+		qArch := strings.ToLower(r.URL.Query().Get("arch"))
+		qTermux := r.URL.Query().Get("termux")
 		userAgent := strings.ToLower(r.Header.Get("User-Agent"))
 		binDir := filepath.Dir(config.AgySyncScript)
 		var binData []byte
-		if strings.Contains(userAgent, "termux") || strings.Contains(r.RemoteAddr, "8022") {
+
+		if qTermux == "1" || strings.Contains(userAgent, "termux") {
 			binData, _ = os.ReadFile(filepath.Join(binDir, "agy-sync-android-arm64"))
+		} else if strings.Contains(qArch, "x86_64") || strings.Contains(qArch, "amd64") {
+			binData, _ = os.ReadFile(filepath.Join(binDir, "agy-sync-linux-amd64"))
 		} else {
 			binData, _ = os.ReadFile(filepath.Join(binDir, "agy-sync-linux-arm64"))
 		}
@@ -558,9 +597,26 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write(binData)
+	})
 
+	mux.HandleFunc("/bin/companion/", func(w http.ResponseWriter, r *http.Request) {
+		cName := filepath.Base(r.URL.Path)
+		if cName == "agy-sync-android-arm64" || cName == "agy-sync-linux-arm64" || cName == "agy-sync-linux-amd64" {
+			binDir := filepath.Dir(config.AgySyncScript)
+			if data, err := os.ReadFile(filepath.Join(binDir, cName)); err == nil {
+				w.Header().Set("Content-Type", "application/octet-stream")
+				_, _ = w.Write(data)
+				return
+			}
+		}
+		http.NotFound(w, r)
+	})
+
+	mux.HandleFunc("/done", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("OK"))
 		go func() {
-			time.Sleep(2 * time.Second)
+			time.Sleep(1 * time.Second)
 			once.Do(func() {
 				if server != nil {
 					_ = server.Close()

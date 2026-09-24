@@ -185,6 +185,7 @@ else:
 			tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.AgySyncScript, time.Now().Unix(), randomToken(3))
 			if err := os.WriteFile(tmpLocal, []byte(stdout), 0755); err == nil {
 				_ = os.Rename(tmpLocal, config.AgySyncScript)
+				PullCompanionBinaries(host, port, binDir, filepath.Dir(remBin))
 				return "pulled"
 			}
 			return "failed"
@@ -212,9 +213,51 @@ else:
 		tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.AgySyncScript, time.Now().Unix(), randomToken(3))
 		if err := os.WriteFile(tmpLocal, newContent, 0755); err == nil {
 			_ = os.Rename(tmpLocal, config.AgySyncScript)
+			PullCompanionBinaries(host, port, binDir, filepath.Dir(remBin))
 			return "pulled"
 		}
 		return "failed"
+	}
+}
+
+func PullCompanionBinaries(host string, port int, localBinDir, remBinDir string) {
+	names := []string{"agy-sync-android-arm64", "agy-sync-linux-arm64", "agy-sync-linux-amd64"}
+	var checkPaths []string
+	for _, name := range names {
+		remPath := filepath.Join(remBinDir, name)
+		checkPaths = append(checkPaths, fmt.Sprintf("'%s'", remPath))
+	}
+
+	checkCmd := fmt.Sprintf("sha256sum %s 2>/dev/null || true", strings.Join(checkPaths, " "))
+	remOut, _, _, _ := ssh.RunSSHCmd(host, port, checkCmd, false)
+	remHashes := make(map[string]string)
+	for _, line := range strings.Split(remOut, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			remHashes[filepath.Base(fields[1])] = fields[0]
+		}
+	}
+
+	for _, name := range names {
+		remHash, ok := remHashes[name]
+		if !ok || remHash == "" {
+			continue
+		}
+		locPath := filepath.Join(localBinDir, name)
+		if data, err := os.ReadFile(locPath); err == nil {
+			h := sha256.Sum256(data)
+			if hex.EncodeToString(h[:]) == remHash {
+				continue // Already matching
+			}
+		}
+		remPath := filepath.Join(remBinDir, name)
+		stdout, _, _, err := ssh.RunSSHCmd(host, port, fmt.Sprintf("cat '%s' 2>/dev/null", remPath), false)
+		if err == nil && len(stdout) >= 4 && bytes.Equal([]byte(stdout[:4]), []byte{0x7f, 'E', 'L', 'F'}) {
+			tmpFile := fmt.Sprintf("%s.tmp_%d_%s", locPath, time.Now().Unix(), randomToken(3))
+			if err := os.WriteFile(tmpFile, []byte(stdout), 0755); err == nil {
+				_ = os.Rename(tmpFile, locPath)
+			}
+		}
 	}
 }
 
