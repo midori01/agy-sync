@@ -246,20 +246,37 @@ func MergeRegistries(regA, regB config.Registry, skewB float64) (config.Registry
 			tA := recA.UpdatedAt
 			tB := recB.UpdatedAt - skewB
 
+			unionLanIPs := func(primary, secondary []string) []string {
+				seen := make(map[string]bool)
+				var res []string
+				for _, ip := range primary {
+					ip = strings.TrimSpace(ip)
+					if ip != "" && !seen[ip] {
+						seen[ip] = true
+						res = append(res, ip)
+					}
+				}
+				for _, ip := range secondary {
+					ip = strings.TrimSpace(ip)
+					if ip != "" && !seen[ip] {
+						seen[ip] = true
+						res = append(res, ip)
+					}
+				}
+				sort.Strings(res)
+				return res
+			}
+
 			if tA >= tB {
 				cp := *recA
-				if len(cp.LanIps) == 0 && len(recB.LanIps) > 0 {
-					cp.LanIps = recB.LanIps
-				}
+				cp.LanIps = unionLanIPs(recA.LanIps, recB.LanIps)
 				merged[ep] = &cp
-				if tA > tB {
+				if tA > tB || len(cp.LanIps) != len(recB.LanIps) {
 					bChanged = true
 				}
 			} else {
 				cp := *recB
-				if len(cp.LanIps) == 0 && len(recA.LanIps) > 0 {
-					cp.LanIps = recA.LanIps
-				}
+				cp.LanIps = unionLanIPs(recB.LanIps, recA.LanIps)
 				merged[ep] = &cp
 				aChanged = true
 			}
@@ -402,6 +419,27 @@ func LoadDefaultTarget() (alias string, targetSSH string, port int) {
 }
 
 func GetClusterTailscaleKey() string {
+	// 1. Check environment variables
+	for _, envKey := range []string{"TAILSCALE_AUTH_KEY", "TS_AUTHKEY", "TAILSCALE_KEY"} {
+		if val := strings.TrimSpace(os.Getenv(envKey)); val != "" {
+			return val
+		}
+	}
+
+	// 2. Check local key files
+	keyFiles := []string{
+		fmt.Sprintf("%s/.gemini/tailscale_key", config.HomeDir),
+		fmt.Sprintf("%s/.tailscale_key", config.HomeDir),
+	}
+	for _, kf := range keyFiles {
+		if data, err := os.ReadFile(kf); err == nil {
+			if val := strings.TrimSpace(string(data)); val != "" {
+				return val
+			}
+		}
+	}
+
+	// 3. Check local sync.conf
 	cfg := config.LoadConfig()
 	if cl, ok := cfg["cluster"]; ok {
 		if k := strings.TrimSpace(cl["tailscale_auth_key"]); k != "" {

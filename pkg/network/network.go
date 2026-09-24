@@ -1,7 +1,6 @@
 package network
 
 import (
-	"bufio"
 	"fmt"
 	"net"
 	"os/exec"
@@ -53,7 +52,44 @@ func GetLocalLanNetworks(forceRefresh ...bool) []LanNetwork {
 
 	var networks []LanNetwork
 
-	// 1. Try ifconfig output
+	// 1. Fast-path: Go native net.Interfaces (0-subprocess, <0.1ms)
+	if ifaces, err := net.Interfaces(); err == nil {
+		for _, iface := range ifaces {
+			ignored := false
+			for _, pfx := range ignoredPrefixes {
+				if strings.HasPrefix(iface.Name, pfx) {
+					ignored = true
+					break
+				}
+			}
+			if ignored {
+				continue
+			}
+
+			if addrs, err := iface.Addrs(); err == nil {
+				for _, addr := range addrs {
+					if ipNet, ok := addr.(*net.IPNet); ok {
+						if ip4 := ipNet.IP.To4(); ip4 != nil && !ip4.IsLoopback() && !ip4.IsLinkLocalUnicast() {
+							networks = append(networks, LanNetwork{
+								Interface: iface.Name,
+								IP:        ip4.String(),
+								Net:       ipNet,
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if len(networks) > 0 {
+		lanNetsCache = networks
+		res := make([]LanNetwork, len(networks))
+		copy(res, networks)
+		return res
+	}
+
+	// 2. Fallback: Try ifconfig output
 	if out, err := exec.Command("ifconfig").Output(); err == nil {
 		rawLines := strings.Split(string(out), "\n")
 		var blocks []string
@@ -183,17 +219,22 @@ func ProbeSSHBanner(ip string, port int, timeout time.Duration) (bool, float64, 
 	// Send probe banner
 	_, _ = conn.Write([]byte("SSH-2.0-AgyProbe\r\n"))
 
-	reader := bufio.NewReader(conn)
-	banner, err := reader.ReadString('\n')
+	var buf [256]byte
+	n, err := conn.Read(buf[:])
 	totalLat := float64(time.Since(t0).Microseconds()) / 1000.0
 
-	banner = strings.TrimSpace(banner)
-	if err == nil && strings.HasPrefix(banner, "SSH-2.0-") {
-		effLat := tcpLat
-		if tcpLat < 10.0 && totalLat >= 10.0 {
-			effLat = totalLat
+	if err == nil && n > 0 {
+		banner := strings.TrimSpace(string(buf[:n]))
+		if idx := strings.IndexByte(banner, '\n'); idx >= 0 {
+			banner = strings.TrimSpace(banner[:idx])
 		}
-		return true, effLat, banner
+		if strings.HasPrefix(banner, "SSH-2.0-") {
+			effLat := tcpLat
+			if tcpLat < 10.0 && totalLat >= 10.0 {
+				effLat = totalLat
+			}
+			return true, effLat, banner
+		}
 	}
 
 	return false, totalLat, ""

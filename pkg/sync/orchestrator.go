@@ -665,7 +665,7 @@ Arguments:
 			remSettings := config.ToRemotePath(config.SettingsFile, remHome)
 			remTargetMTime := localMTime + int64(skew)
 			remParent := filepath.Dir(remSettings)
-			tmpRemote := fmt.Sprintf("%s.tmp_push_%d_%s", remSettings, time.Now().Unix(), randomToken(3))
+			tmpRemote := fmt.Sprintf("%s.tmp_push_%d_%s", remSettings, time.Now().UnixNano(), randomToken(3))
 
 			pushCmd := fmt.Sprintf("mkdir -p '%s' && (cat > '%s' && chmod 600 '%s' && (touch -d @%d '%s' 2>/dev/null || true) && mv -f '%s' '%s' && (touch -d @%d '%s' 2>/dev/null || true) || (rm -f '%s' 2>/dev/null; false))",
 				remParent, tmpRemote, tmpRemote, remTargetMTime, tmpRemote, tmpRemote, remSettings, remTargetMTime, remSettings, tmpRemote)
@@ -795,7 +795,7 @@ Arguments:
 			remPool := config.ToRemotePath(config.PoolAccountsFile, remHome)
 			remTargetMTime := localMTime + int64(skew)
 			remParent := filepath.Dir(remPool)
-			tmpRemote := fmt.Sprintf("%s.tmp_push_pool_%d_%s", remPool, time.Now().Unix(), randomToken(3))
+			tmpRemote := fmt.Sprintf("%s.tmp_push_pool_%d_%s", remPool, time.Now().UnixNano(), randomToken(3))
 
 			pushCmd := fmt.Sprintf("mkdir -p '%s' && (cat > '%s' && chmod 600 '%s' && (touch -d @%d '%s' 2>/dev/null || true) && mv -f '%s' '%s' && (touch -d @%d '%s' 2>/dev/null || true) || (rm -f '%s' 2>/dev/null; false))",
 				remParent, tmpRemote, tmpRemote, remTargetMTime, tmpRemote, tmpRemote, remPool, remTargetMTime, remPool, tmpRemote)

@@ -238,6 +238,9 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 		parts := strings.Fields(line)
 		if len(parts) >= 3 {
 			fname := filepath.Base(parts[0])
+			if !strings.HasSuffix(fname, ".db") || fname == ".db" || strings.Contains(fname, "*") || strings.Contains(fname, "/") || strings.Contains(fname, "\\") {
+				continue
+			}
 			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
 			sz, _ := strconv.ParseInt(parts[2], 10, 64)
 			remoteDBs[fname] = [2]int64{mtime - int64(clockSkew), sz}
@@ -383,6 +386,9 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string) (
 		parts := strings.Fields(line)
 		if len(parts) >= 2 {
 			fname := filepath.Base(parts[0])
+			if !strings.HasSuffix(fname, ".pbtxt") || fname == ".pbtxt" || strings.Contains(fname, "*") || strings.Contains(fname, "/") || strings.Contains(fname, "\\") {
+				continue
+			}
 			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
 			remoteAnns[fname] = mtime - int64(clockSkew)
 		}

@@ -146,7 +146,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 
 		// B. Fallback for devices WITHOUT Go compiler: pull ready binary from remote!
 		if binData, err := PullRemoteBinaryForLocal(host, port, remHome, remArch, remCommit); err == nil && len(binData) > 0 {
-			tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.AgySyncScript, time.Now().Unix(), randomToken(3))
+			tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.AgySyncScript, time.Now().UnixNano(), randomToken(3))
 			if err := os.WriteFile(tmpLocal, binData, 0755); err == nil {
 				_ = os.Rename(tmpLocal, config.AgySyncScript)
 				config.GitCommit = remCommit
@@ -200,7 +200,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 
 	// 6. Push binary to remote
 	remParent := filepath.Dir(remBin)
-	tmpRem := fmt.Sprintf("%s.tmp_%d_%s", remBin, time.Now().Unix(), randomToken(3))
+	tmpRem := fmt.Sprintf("%s.tmp_%d_%s", remBin, time.Now().UnixNano(), randomToken(3))
 	remTargetMTime := fi.ModTime().Unix() + int64(clockSkew)
 
 	pushCmd := fmt.Sprintf(`mkdir -p '%s' && cat > '%s' && chmod 755 '%s' && `+

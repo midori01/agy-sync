@@ -132,6 +132,9 @@ func ShowDevices(verbose bool) {
 						_, rawH, rawP, _ := config.ParseEndpoint(effH, effP)
 						ok, bannerLat, _ := network.ProbeSSHBanner(rawH, rawP, 1800*time.Millisecond)
 						if ok {
+							if rLat == 0 {
+								rLat = bannerLat
+							}
 							pRes = DeviceProbeRes{
 								Online:   true,
 								Latency:  bannerLat,

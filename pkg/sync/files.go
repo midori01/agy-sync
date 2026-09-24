@@ -84,7 +84,7 @@ func SyncSingleFile(localPath, remotePath, host string, port int, name string, c
 	normalizedRemoteMTime := remoteMTime - int64(clockSkew)
 	if localExists && (!remoteExists || localMTime >= normalizedRemoteMTime) {
 		remoteParent := filepath.Dir(remotePath)
-		tmpRemote := fmt.Sprintf("%s.tmp_push_%d_%s", remotePath, time.Now().Unix(), randomToken(3))
+		tmpRemote := fmt.Sprintf("%s.tmp_push_%d_%s", remotePath, time.Now().UnixNano(), randomToken(3))
 		remTargetMTime := localMTime + int64(clockSkew)
 
 		chmodClause := ""
@@ -110,7 +110,7 @@ func SyncSingleFile(localPath, remotePath, host string, port int, name string, c
 		return "failed"
 	} else if remoteExists {
 		_ = os.MkdirAll(filepath.Dir(localPath), 0755)
-		tmpLocal := fmt.Sprintf("%s.tmp_pull_%d_%s", localPath, time.Now().Unix(), randomToken(3))
+		tmpLocal := fmt.Sprintf("%s.tmp_pull_%d_%s", localPath, time.Now().UnixNano(), randomToken(3))
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("cat '%s'", remotePath), true)
 		proc := exec.Command("ssh", sshArgs...)
 		out, err := proc.Output()
@@ -288,7 +288,7 @@ func SyncClusterRegistry(host string, port int, clockSkew float64, remHome strin
 	}
 
 	if remoteChg || len(remoteReg) == 0 {
-		tmpReg := fmt.Sprintf("%s.tmp_%d", remDev, time.Now().Unix())
+		tmpReg := fmt.Sprintf("%s.tmp_%d", remDev, time.Now().UnixNano())
 		remDir := filepath.Dir(remDev)
 		cmd := fmt.Sprintf("mkdir -p '%s' && cat > '%s' && mv -f '%s' '%s'", remDir, tmpReg, tmpReg, remDev)
 		sshArgs := ssh.GetSSHCmd(host, port, cmd, true)
@@ -407,7 +407,7 @@ func SyncHistoryJsonl(host string, port int, remHome string, probeCache map[stri
 
 	if localChanged {
 		_ = os.MkdirAll(filepath.Dir(config.HistoryFile), 0755)
-		tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.HistoryFile, time.Now().Unix(), randomToken(3))
+		tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.HistoryFile, time.Now().UnixNano(), randomToken(3))
 		if err := os.WriteFile(tmpLocal, []byte(mergedContent), 0644); err == nil {
 			_ = os.Rename(tmpLocal, config.HistoryFile)
 		}
@@ -415,7 +415,7 @@ func SyncHistoryJsonl(host string, port int, remHome string, probeCache map[stri
 
 	if remoteChanged {
 		remDir := filepath.Dir(remHist)
-		remTmp := fmt.Sprintf("%s.tmp_%d_%s", remHist, time.Now().Unix(), randomToken(3))
+		remTmp := fmt.Sprintf("%s.tmp_%d_%s", remHist, time.Now().UnixNano(), randomToken(3))
 		cmd := fmt.Sprintf("mkdir -p '%s' && (cat > '%s' && mv -f '%s' '%s' || (rm -f '%s' 2>/dev/null; false))", remDir, remTmp, remTmp, remHist, remTmp)
 		sshArgs := ssh.GetSSHCmd(host, port, cmd, true)
 		proc := exec.Command("ssh", sshArgs...)
@@ -857,7 +857,7 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 	}
 
 	if localChanged {
-		tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.PoolAccountsFile, time.Now().Unix(), randomToken(3))
+		tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.PoolAccountsFile, time.Now().UnixNano(), randomToken(3))
 		if err := os.WriteFile(tmpLocal, []byte(contentStr), 0600); err == nil {
 			_ = os.Rename(tmpLocal, config.PoolAccountsFile)
 		}
@@ -865,7 +865,7 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 
 	if remoteChanged {
 		remDir := filepath.Dir(remPoolCfg)
-		remTmp := fmt.Sprintf("%s.tmp_%d_%s", remPoolCfg, time.Now().Unix(), randomToken(3))
+		remTmp := fmt.Sprintf("%s.tmp_%d_%s", remPoolCfg, time.Now().UnixNano(), randomToken(3))
 		cmd := fmt.Sprintf("mkdir -p '%s' && cat > '%s' && chmod 600 '%s' && mv -f '%s' '%s'", remDir, remTmp, remTmp, remTmp, remPoolCfg)
 		sshArgs := ssh.GetSSHCmd(host, port, cmd, true)
 		proc := exec.Command("ssh", sshArgs...)
