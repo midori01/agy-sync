@@ -44,7 +44,7 @@ var (
 )
 
 const (
-	Version               = "6.7"
+	Version               = "7.0"
 	SSHConfigMarkerStart  = "# >>> agy-sync cluster devices >>>"
 	SSHConfigMarkerEnd    = "# <<< agy-sync cluster devices <<<"
 	ShellPeerMarkerStart  = "# >>> agy-sync ssh peer integration >>>"
