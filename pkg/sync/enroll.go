@@ -408,8 +408,8 @@ fi
 	// 8. Deploy agy-sync-go source & agy-pool Multi-Account Engine
 	if _, err := os.Stat(config.AgySyncGoDir); err == nil {
 		fmt.Println("[🐹] Deploying agy-sync-go source repository...")
-		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude=*.tmp*", "-czf", "-", "agy-sync-go")
-		p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, "tar -C ~ --no-same-owner -xzf -", true)...)
+		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
+		p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, "tar -C ~ --no-same-owner -xzf - 2>/dev/null && git -C ~/agy-sync-go checkout . 2>/dev/null", true)...)
 		_ = RunPipedCommands(p1, p2)
 	}
 
@@ -544,6 +544,7 @@ func CmdPair(args []string) {
 	mux := http.NewServeMux()
 	var server *http.Server
 	var pairedName string
+	var pairedEP string
 	var pairMu sync.Mutex
 	var once sync.Once
 
@@ -558,9 +559,13 @@ echo "[🚀] Enrolling device into Antigravity cluster via '%s'..."
 if [ -d "/data/data/com.termux" ]; then
     pkg update -y >/dev/null 2>&1 || true
     pkg install -y openssh python tar curl golang make git >/dev/null 2>&1 || true
+    sshd 2>/dev/null || true
 elif command -v apt-get >/dev/null 2>&1; then
     sudo -n apt-get update -y >/dev/null 2>&1 || true
     sudo -n apt-get install -y openssh-client openssh-server python3 python3-sqlite3 tar curl iptables golang-go make git >/dev/null 2>&1 || true
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo -n systemctl enable --now ssh 2>/dev/null || sudo -n systemctl enable --now sshd 2>/dev/null || true
+    fi
 fi
 
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -570,13 +575,14 @@ fi
 PUB="$(cat ~/.ssh/id_ed25519.pub)"
 HNAME="$(uname -n 2>/dev/null || echo node)"
 ARCH="$(uname -m 2>/dev/null || echo unknown)"
-IS_TERMUX="0"
+REM_USER="$(whoami 2>/dev/null || echo "$USER")"
+REM_PORT="22"
 if [ -d "/data/data/com.termux" ]; then
-    IS_TERMUX="1"
+    REM_PORT="8022"
 fi
-LAN_IPS="$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br)/ {print $4}' | cut -d/ -f1) | tr '\n' ',')"
+LAN_IPS="$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/ {print $4}' | cut -d/ -f1) | tr '\n' ',')"
 
-RESP="$(curl -fsSL --data-urlencode "pubkey=$PUB" --data-urlencode "name=$HNAME" --data-urlencode "lan_ips=$LAN_IPS" "http://%s:%d/exchange/%s")"
+RESP="$(curl -fsSL --data-urlencode "pubkey=$PUB" --data-urlencode "name=$HNAME" --data-urlencode "lan_ips=$LAN_IPS" --data-urlencode "user=$REM_USER" --data-urlencode "port=$REM_PORT" "http://%s:%d/exchange/%s")"
 
 mkdir -p ~/.gemini/antigravity-cli/bin ~/.local/bin ~/.ssh
 echo "$RESP" | grep "^ALL_KEYS_B64:" | cut -d: -f2 | base64 -d > ~/.ssh/authorized_keys
@@ -606,17 +612,38 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 		peerPub := strings.TrimSpace(r.FormValue("pubkey"))
 		peerName := strings.TrimSpace(r.FormValue("name"))
 		peerLanIPs := r.FormValue("lan_ips")
+		peerUser := strings.TrimSpace(r.FormValue("user"))
+		peerPortStr := strings.TrimSpace(r.FormValue("port"))
 
 		if peerPub != "" && (strings.HasPrefix(peerPub, "ssh-") || strings.HasPrefix(peerPub, "ecdsa-")) {
+			// 1. Add new peer's public key to local authorized_keys
+			localKeys := make(map[string]bool)
+			if data, err := os.ReadFile(config.AuthKeysFile); err == nil {
+				for _, line := range strings.Split(string(data), "\n") {
+					if k := strings.TrimSpace(line); k != "" {
+						localKeys[k] = true
+					}
+				}
+			}
+			if !localKeys[peerPub] {
+				localKeys[peerPub] = true
+				var sortedKeys []string
+				for k := range localKeys {
+					sortedKeys = append(sortedKeys, k)
+				}
+				sort.Strings(sortedKeys)
+				_ = config.WriteFileAtomic(config.AuthKeysFile, []byte(strings.Join(sortedKeys, "\n")+"\n"), 0600)
+			}
+
+			// 2. Broadcast new peer's public key across existing cluster peers
+			cluster.BroadcastAuthorizedKeyToOnlinePeers(peerPub)
+
 			peerName = regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`).ReplaceAllString(peerName, "")
 			if peerName == "" {
 				peerName = "node"
 			}
 			reg := config.LoadRegistry()
 			alias := cluster.GetUniqueAlias(peerName, peerPub, reg)
-			pairMu.Lock()
-			pairedName = fmt.Sprintf("%s (%s)", alias, peerName)
-			pairMu.Unlock()
 
 			var ips []string
 			for _, ip := range strings.Split(peerLanIPs, ",") {
@@ -626,19 +653,39 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 			}
 
 			clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-			peerEP := fmt.Sprintf("%s:8022", clientIP)
+			peerPort := 8022
+			if p, err := strconv.Atoi(peerPortStr); err == nil && p > 0 {
+				peerPort = p
+			} else if strings.TrimSpace(r.FormValue("port")) == "22" {
+				peerPort = 22
+			}
+			idType := "Host"
+			if peerPort == 8022 {
+				idType = "Codename"
+			}
+			peerEP := fmt.Sprintf("%s:%d", clientIP, peerPort)
+			if peerUser != "" && peerUser != os.Getenv("USER") {
+				peerEP = fmt.Sprintf("%s@%s:%d", peerUser, clientIP, peerPort)
+			}
+
 			reg[peerEP] = &config.DeviceEntry{
 				Alias:        alias,
 				NativeName:   strings.ToLower(peerName),
-				IdType:       "Host",
+				IdType:       idType,
 				Deleted:      false,
 				UpdatedAt:    float64(time.Now().UnixNano()) / 1e9,
+				User:         peerUser,
 				LanIps:       ips,
 				LanUpdatedAt: float64(time.Now().UnixNano()) / 1e9,
 			}
 			_ = config.SaveRegistry(reg)
 			cluster.ReconcileRegistry()
 			cluster.BroadcastRegistryToOnlinePeers(true)
+
+			pairMu.Lock()
+			pairedName = fmt.Sprintf("%s (%s)", alias, peerName)
+			pairedEP = peerEP
+			pairMu.Unlock()
 
 			allKeys, _ := os.ReadFile(config.AuthKeysFile)
 			allKeysB64 := base64.StdEncoding.EncodeToString(allKeys)
@@ -691,8 +738,15 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 	_ = server.ListenAndServe()
 	pairMu.Lock()
 	pName := pairedName
+	pEP := pairedEP
 	pairMu.Unlock()
-	if pName != "" {
+	if pName != "" && pEP != "" {
 		fmt.Printf("\n[✅] Successfully paired and enrolled new device '%s'! 🎉\n", pName)
+		fmt.Printf("[🔄] Performing initial cluster synchronization with '%s'...\n", pName)
+		_, _, finalPort, finalSSH := config.ParseEndpoint(pEP, 8022)
+		parts := strings.Fields(pName)
+		peerAlias := parts[0]
+		SyncWithPeer(finalSSH, finalPort, peerAlias, false, false, nil, nil)
+		fmt.Printf("[🎉] Initial synchronization with '%s' complete!\n", peerAlias)
 	}
 }
