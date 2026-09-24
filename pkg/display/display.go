@@ -441,6 +441,9 @@ func ShowItems() {
 	if fi, err := os.Stat(config.PoolDir); err == nil && fi.IsDir() {
 		items = append(items, manifestItem{"👥 Account Pool Engine", config.PoolDir, "Tar Stream + Auto"})
 	}
+	if fi, err := os.Stat(config.AgySyncGoDir); err == nil && fi.IsDir() {
+		items = append(items, manifestItem{"🐹 Go Engine Source", config.AgySyncGoDir, "Tar Stream + Git"})
+	}
 
 	items = append(items, []manifestItem{
 		{"🗂️ Conversation Index", config.SummariesDBFile, "SQLite Union"},

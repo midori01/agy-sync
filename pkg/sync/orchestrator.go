@@ -303,6 +303,12 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 		recordAsset("Account Pool Engine", engineStat, "🏊", engineStat == "pushed" || engineStat == "pulled" || engineStat == "installed & ready")
 	}
 
+	// 3.9 Sync Go Synchronizer Source Code
+	goSrcStat := SyncAgySyncGo(host, port, remHome, clockSkew)
+	if goSrcStat != "none" {
+		recordAsset("Go Synchronizer Source", goSrcStat, "🐹", goSrcStat == "pushed" || goSrcStat == "pulled" || goSrcStat == "installed & ready")
+	}
+
 	// 4. Sync CLI Settings & Proto Summaries
 	stepStatus("CLI settings & summaries")
 	remSettings := config.ToRemotePath(config.SettingsFile, remHome)

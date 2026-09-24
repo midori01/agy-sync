@@ -38,6 +38,7 @@ var (
 	OAuthTokenFile      string
 	PoolAccountsFile    string
 	PoolDir             string
+	AgySyncGoDir        string
 	SocketDir           string
 )
 
@@ -94,6 +95,7 @@ func init() {
 	OAuthTokenFile = filepath.Join(CliDir, "antigravity-oauth-token")
 	PoolAccountsFile = filepath.Join(GeminiDir, "agy-pool-accounts.json")
 	PoolDir = filepath.Join(HomeDir, "agy-pool")
+	AgySyncGoDir = filepath.Join(HomeDir, "agy-sync-go")
 	SocketDir = filepath.Join(HomeDir, ".ssh", "sockets")
 
 	_ = os.MkdirAll(SocketDir, 0700)

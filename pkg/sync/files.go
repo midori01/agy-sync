@@ -810,3 +810,75 @@ fi`, remPoolDir, remPoolDir, remPoolDir, remPoolDir)
 
 	return "none"
 }
+
+func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) string {
+	remGoDir := fmt.Sprintf("%s/agy-sync-go", remHome)
+	localHasGo := false
+	if fi, err := os.Stat(config.AgySyncGoDir); err == nil && fi.IsDir() {
+		localHasGo = true
+	}
+
+	stdout, _, _, _ := ssh.RunSSHCmd(host, port, fmt.Sprintf("test -d '%s' && echo YES || echo NO", remGoDir), false)
+	remoteHasGo := strings.Contains(stdout, "YES")
+
+	if !localHasGo && !remoteHasGo {
+		return "none"
+	}
+
+	if localHasGo && remoteHasGo {
+		locHash := ""
+		if out, err := exec.Command("git", "-C", config.AgySyncGoDir, "rev-parse", "HEAD").Output(); err == nil {
+			locHash = strings.TrimSpace(string(out))
+		}
+		locDirty := false
+		if out, err := exec.Command("git", "-C", config.AgySyncGoDir, "status", "--porcelain").Output(); err == nil {
+			if len(strings.TrimSpace(string(out))) > 0 {
+				locDirty = true
+			}
+		}
+
+		remCheckCmd := fmt.Sprintf("git -C '%s' rev-parse HEAD 2>/dev/null || echo NONE; git -C '%s' status --porcelain 2>/dev/null", remGoDir, remGoDir)
+		remOut, _, _, _ := ssh.RunSSHCmd(host, port, remCheckCmd, false)
+		remLines := strings.Split(strings.TrimSpace(remOut), "\n")
+		remHash := ""
+		remDirty := false
+		if len(remLines) > 0 {
+			remHash = strings.TrimSpace(remLines[0])
+		}
+		if len(remLines) > 1 {
+			for _, l := range remLines[1:] {
+				if len(strings.TrimSpace(l)) > 0 {
+					remDirty = true
+					break
+				}
+			}
+		}
+
+		if locHash != "" && remHash != "" && locHash == remHash && !locDirty && !remDirty {
+			return "identical"
+		}
+	}
+
+	// Push local to remote (excluding compiled bin/ directory)
+	if localHasGo {
+		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude=*.tmp*", "-czf", "-", "agy-sync-go")
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -xzf - 2>/dev/null", remHome), true)
+		p2 := exec.Command("ssh", sshArgs...)
+		pipe, err := p1.StdoutPipe()
+		if err == nil {
+			p2.Stdin = pipe
+			_ = p1.Start()
+			_ = p2.Start()
+			_ = p1.Wait()
+			if err := p2.Wait(); err == nil {
+				if !remoteHasGo {
+					return "installed & ready"
+				}
+				return "pushed"
+			}
+		}
+		return "failed"
+	}
+
+	return "none"
+}
