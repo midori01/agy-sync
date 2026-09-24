@@ -19,6 +19,8 @@ import (
 	"agy-sync/pkg/network"
 )
 
+var safeHostCharRegex = regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`)
+
 func GetSSHCmd(host string, port int, cmd string, batch bool, connectTimeout ...int) []string {
 	to := 8
 	if len(connectTimeout) > 0 && connectTimeout[0] > 0 {
@@ -177,7 +179,7 @@ func ReconcileSSHConfig(reg ...config.Registry) {
 		}
 
 		if len(hostAliases) == 0 {
-			cleanHost := regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`).ReplaceAllString(host, "")
+			cleanHost := safeHostCharRegex.ReplaceAllString(host, "")
 			if cleanHost != "" {
 				hostAliases = []string{cleanHost}
 			}
@@ -191,7 +193,7 @@ func ReconcileSSHConfig(reg ...config.Registry) {
 		seenLan := make(map[string]bool)
 		for _, lanIP := range data.LanIps {
 			lanIP = strings.TrimSpace(lanIP)
-			if lanIP != "" && lanIP != "127.0.0.1" && lanIP != "localhost" && lanIP != "0.0.0.0" && !seenLan[lanIP] {
+			if lanIP != "" && lanIP != host && lanIP != "127.0.0.1" && lanIP != "localhost" && lanIP != "0.0.0.0" && !seenLan[lanIP] {
 				seenLan[lanIP] = true
 				matchLines := []string{
 					fmt.Sprintf("Match host %s exec \"agy-sync probe-lan %%h %s %d 2>/dev/null || $HOME/.gemini/antigravity-cli/bin/agy-sync probe-lan %%h %s %d 2>/dev/null\"", strings.Join(hostAliases, ","), lanIP, port, lanIP, port),
@@ -199,7 +201,7 @@ func ReconcileSSHConfig(reg ...config.Registry) {
 					fmt.Sprintf("  Port %d", port),
 				}
 				if effectiveUser != "" {
-					cleanUser := regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`).ReplaceAllString(effectiveUser, "")
+					cleanUser := safeHostCharRegex.ReplaceAllString(effectiveUser, "")
 					if cleanUser != "" {
 						matchLines = append(matchLines, fmt.Sprintf("  User %s", cleanUser))
 					}
@@ -222,7 +224,7 @@ func ReconcileSSHConfig(reg ...config.Registry) {
 			fmt.Sprintf("  Port %d", port),
 		}
 		if effectiveUser != "" {
-			cleanUser := regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`).ReplaceAllString(effectiveUser, "")
+			cleanUser := safeHostCharRegex.ReplaceAllString(effectiveUser, "")
 			if cleanUser != "" {
 				entryLines = append(entryLines, fmt.Sprintf("  User %s", cleanUser))
 			}
@@ -348,12 +350,12 @@ func ReconcileShellIntegration(reg ...config.Registry) {
 		if native != "" && config.SafeAliasRegex.MatchString(native) {
 			activePeers[native] = true
 		}
-		cleanHost := strings.ToLower(regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`).ReplaceAllString(host, ""))
+		cleanHost := strings.ToLower(safeHostCharRegex.ReplaceAllString(host, ""))
 		if cleanHost != "" && cleanHost != "127.0.0.1" && cleanHost != "localhost" {
 			activePeers[cleanHost] = true
 		}
 		for _, lanIP := range data.LanIps {
-			lip := strings.ToLower(strings.TrimSpace(regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`).ReplaceAllString(lanIP, "")))
+			lip := strings.ToLower(strings.TrimSpace(safeHostCharRegex.ReplaceAllString(lanIP, "")))
 			if lip != "" && !strings.HasPrefix(lip, "127.") && lip != "0.0.0.0" {
 				activePeers[lip] = true
 			}

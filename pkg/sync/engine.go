@@ -130,13 +130,17 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 			if err == nil {
 				newCommit := strings.TrimSpace(string(out))
 				ldflags := fmt.Sprintf("-s -w -X agy-sync/pkg/config.GitCommit=%s", newCommit)
-				buildCmd := exec.Command("go", "build", "-trimpath", fmt.Sprintf("-ldflags=%s", ldflags), "-o", config.AgySyncScript, "./cmd/agy-sync")
+				tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.AgySyncScript, time.Now().UnixNano(), randomToken(3))
+				buildCmd := exec.Command("go", "build", "-trimpath", fmt.Sprintf("-ldflags=%s", ldflags), "-o", tmpLocal, "./cmd/agy-sync")
 				buildCmd.Dir = config.AgySyncGoDir
 				buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", fmt.Sprintf("GOARCH=%s", runtime.GOARCH))
 				if err := buildCmd.Run(); err == nil {
+					_ = os.Rename(tmpLocal, config.AgySyncScript)
+					_ = os.Chmod(config.AgySyncScript, 0755)
 					config.GitCommit = newCommit
 					return "pulled & rebuilt locally"
 				}
+				_ = os.Remove(tmpLocal)
 			}
 		}
 

@@ -476,10 +476,14 @@ if os.path.isdir(b):
 	for _, line := range strings.Split(stdout, "\n") {
 		parts := strings.Split(line, "\t")
 		if len(parts) >= 3 {
-			uuid := parts[0]
+			rawUUID := strings.TrimSpace(parts[0])
+			cleanUUID := filepath.Base(filepath.Clean(rawUUID))
+			if cleanUUID == "" || cleanUUID == "." || cleanUUID == ".." || strings.Contains(cleanUUID, "/") || strings.Contains(cleanUUID, "\\") {
+				continue
+			}
 			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
 			sz, _ := strconv.ParseInt(parts[2], 10, 64)
-			remoteBrains[uuid] = [2]int64{mtime - int64(clockSkew), sz}
+			remoteBrains[cleanUUID] = [2]int64{mtime - int64(clockSkew), sz}
 		}
 	}
 

@@ -207,7 +207,9 @@ func SyncAuthorizedKeys(host string, port int, remHome string, probeCache map[st
 		sshArgs := ssh.GetSSHCmd(host, port, cmd, true)
 		proc := exec.Command("ssh", sshArgs...)
 		proc.Stdin = strings.NewReader(content)
-		_ = proc.Run()
+		if err := proc.Run(); err != nil {
+			return "failed to update remote keys"
+		}
 	}
 
 	return fmt.Sprintf("%d active key(s)", len(merged))
@@ -293,7 +295,9 @@ func SyncClusterRegistry(host string, port int, clockSkew float64, remHome strin
 		proc := exec.Command("ssh", sshArgs...)
 		data, _ := json.MarshalIndent(merged, "", "  ")
 		proc.Stdin = strings.NewReader(string(data) + "\n")
-		_ = proc.Run()
+		if err := proc.Run(); err != nil {
+			return "failed to update remote registry"
+		}
 		_, _, _, _ = ssh.RunSSHCmd(host, port, fmt.Sprintf("%s agy-sync refresh-registry 2>/dev/null || true", config.PathPrefix), false)
 	}
 
@@ -416,7 +420,9 @@ func SyncHistoryJsonl(host string, port int, remHome string, probeCache map[stri
 		sshArgs := ssh.GetSSHCmd(host, port, cmd, true)
 		proc := exec.Command("ssh", sshArgs...)
 		proc.Stdin = strings.NewReader(mergedContent)
-		_ = proc.Run()
+		if err := proc.Run(); err != nil {
+			return "failed to update remote history"
+		}
 	}
 
 	if !localChanged && !remoteChanged {
@@ -864,7 +870,9 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 		sshArgs := ssh.GetSSHCmd(host, port, cmd, true)
 		proc := exec.Command("ssh", sshArgs...)
 		proc.Stdin = strings.NewReader(contentStr)
-		_ = proc.Run()
+		if err := proc.Run(); err != nil {
+			return "failed to update remote accounts"
+		}
 	}
 
 	if localChanged && remoteChanged {

@@ -15,6 +15,14 @@ var wideEmojis = map[rune]bool{
 	'🐹': true,
 }
 
+// SanitizeText replaces tabs and newlines with spaces and strips control chars.
+func SanitizeText(s string) string {
+	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return s
+}
+
 // StrWidth calculates visible terminal width accounting for wide chars and ANSI codes.
 func StrWidth(s string) int {
 	clean := ansiRegex.ReplaceAllString(s, "")
@@ -22,7 +30,11 @@ func StrWidth(s string) int {
 
 	w := 0
 	for _, ch := range clean {
-		if wideEmojis[ch] {
+		if ch == '\t' {
+			w += 1
+		} else if ch == '\r' || ch == '\n' || ch < 0x20 || (0x7F <= ch && ch <= 0x9F) {
+			continue
+		} else if wideEmojis[ch] {
 			w += 2
 		} else if (0x1100 <= ch && ch <= 0x115F) ||
 			(0x2E80 <= ch && ch <= 0xA4CF) ||
@@ -42,6 +54,7 @@ func StrWidth(s string) int {
 
 // PadTo pads or aligns a string to targetWidth using visual terminal width.
 func PadTo(s string, targetWidth int, align ...string) string {
+	s = SanitizeText(s)
 	currentW := StrWidth(s)
 	pad := targetWidth - currentW
 	if pad <= 0 {

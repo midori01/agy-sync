@@ -21,8 +21,10 @@ type LanNetwork struct {
 }
 
 var (
-	lanNetsCache []LanNetwork
-	lanNetsLock  sync.Mutex
+	lanNetsCache   []LanNetwork
+	lanNetsLock    sync.Mutex
+	reIfconfigIP   = regexp.MustCompile(`inet\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)`)
+	reIfconfigMask = regexp.MustCompile(`netmask\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)`)
 )
 
 var ignoredPrefixes = []string{
@@ -93,10 +95,8 @@ func GetLocalLanNetworks(forceRefresh ...bool) []LanNetwork {
 				continue
 			}
 
-			reIP := regexp.MustCompile(`inet\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)`)
-			reMask := regexp.MustCompile(`netmask\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)`)
-			mIP := reIP.FindStringSubmatch(block)
-			mMask := reMask.FindStringSubmatch(block)
+			mIP := reIfconfigIP.FindStringSubmatch(block)
+			mMask := reIfconfigMask.FindStringSubmatch(block)
 			if len(mIP) > 1 && len(mMask) > 1 {
 				ipStr := mIP[1]
 				maskStr := mMask[1]

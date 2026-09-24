@@ -372,7 +372,9 @@ cat ~/.ssh/id_ed25519.pub
 		sshArgs := ssh.GetSSHCmd(sshTarget, port, deployKeysCmd, true)
 		proc := exec.Command("ssh", sshArgs...)
 		proc.Stdin = strings.NewReader(allKeysContent)
-		_ = proc.Run()
+		if err := proc.Run(); err != nil {
+			fmt.Printf("[⚠️] Warning: failed to write authorized_keys to %s: %v\n", sshTarget, err)
+		}
 
 		cluster.BroadcastAuthorizedKeyToOnlinePeers(remPubkey)
 		fmt.Println("[✅] Full-mesh SSH mutual trust established across cluster.")

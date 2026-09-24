@@ -3,6 +3,7 @@ package sync
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,8 @@ import (
 	"agy-sync/pkg/ssh"
 	"agy-sync/pkg/terminal"
 )
+
+var ipv4Regex = regexp.MustCompile(`^\d+\.\d+\.\d+\.\d+$`)
 
 type PreResolvedRoute struct {
 	Host      string
@@ -117,7 +120,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 					PeerName:  peerName,
 					RouteTier: routeTier,
 					RouteLat:  routeLat,
-					Elapsed:   time.Since(t0).Seconds(),
+					Elapsed:   math.Round(time.Since(t0).Seconds()*100) / 100.0,
 					Error:     errMsg,
 				}
 				if !isBatch {
@@ -138,7 +141,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 				PeerName:  peerName,
 				RouteTier: routeTier,
 				RouteLat:  routeLat,
-				Elapsed:   time.Since(t0).Seconds(),
+				Elapsed:   math.Round(time.Since(t0).Seconds()*100) / 100.0,
 				Error:     errMsg,
 			}
 			if !isBatch {
@@ -177,7 +180,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 			for _, token := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
 				token = strings.TrimSpace(token)
 				if token != "" && token != "127.0.0.1" && token != "localhost" && token != "0.0.0.0" && token != "::1" && !strings.HasPrefix(token, "100.") {
-					if regexp.MustCompile(`^\d+\.\d+\.\d+\.\d+$`).MatchString(token) && !seen[token] {
+					if ipv4Regex.MatchString(token) && !seen[token] {
 						seen[token] = true
 						remLanIPs = append(remLanIPs, token)
 					}
@@ -388,7 +391,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	recordAsset("Skills & Configs", cfgDesc, "🛠️", cfgChanged)
 
 	stepStatus("Finalizing")
-	elapsed := float64(int(time.Since(t0).Seconds()*100+0.5)) / 100.0
+	elapsed := math.Round(time.Since(t0).Seconds()*100) / 100.0
 
 	if createdSpinner && activeSpinner != nil {
 		activeSpinner.Stop()

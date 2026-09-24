@@ -163,7 +163,7 @@ func main() {
 	case "all", "--all":
 		verbose := false
 		for _, a := range args[1:] {
-			if a == "-V" || a == "--verbose" {
+			if a == "-V" || a == "-v" || a == "--verbose" {
 				verbose = true
 			}
 		}
@@ -311,7 +311,7 @@ func main() {
 		i := 0
 		for i < len(args) {
 			a := args[i]
-			if a == "-V" || a == "--verbose" {
+			if a == "-V" || a == "-v" || a == "--verbose" {
 				verbose = true
 				i++
 			} else if a == "--save" {

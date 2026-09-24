@@ -45,7 +45,7 @@ var (
 )
 
 var (
-	Version   = "7.1"
+	Version   = "7.2"
 	GitCommit = "dev"
 )
 
@@ -60,15 +60,19 @@ const (
 var ReservedAliases = map[string]bool{
 	"all": true, "items": true, "devices": true, "device": true, "nodes": true,
 	"pair": true, "invite": true, "enroll": true, "deploy": true, "alias": true,
-	"rename": true, "unalias": true, "self": true, "local": true, "me": true,
-	"this": true, "help": true, "ssh": true, "connect": true, "keepalive": true,
-	"ping": true, "daemon": true, "manifest": true, "list": true, "reconcile": true,
-	"refresh-registry": true, "version": true, "probe-lan": true,
+	"rename": true, "unalias": true, "reset-alias": true, "self": true, "set-self": true,
+	"local": true, "me": true, "this": true, "help": true, "ssh": true, "connect": true,
+	"keepalive": true, "ping": true, "daemon": true, "manifest": true, "list": true,
+	"list-devices": true, "list-items": true, "commit": true,
+	"reconcile": true, "refresh-registry": true, "version": true, "probe-lan": true,
 	"push-settings": true, "settings": true, "is-peer": true,
 	"push-pool": true, "push-accounts": true, "pool-push": true,
 }
 
-var SafeAliasRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-\.]+$`)
+var (
+	SafeAliasRegex    = regexp.MustCompile(`^[a-zA-Z0-9_\-\.]+$`)
+	ifconfigInetRegex = regexp.MustCompile(`inet\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)`)
+)
 
 func init() {
 	HomeDir = os.Getenv("HOME")
@@ -417,8 +421,7 @@ func GetLocalIPs(forceRefresh bool) map[string]bool {
 
 	// 2. ifconfig inet
 	if out, err := exec.Command("ifconfig").Output(); err == nil {
-		re := regexp.MustCompile(`inet\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)`)
-		matches := re.FindAllStringSubmatch(string(out), -1)
+		matches := ifconfigInetRegex.FindAllStringSubmatch(string(out), -1)
 		for _, m := range matches {
 			if len(m) > 1 {
 				ips[m[1]] = true

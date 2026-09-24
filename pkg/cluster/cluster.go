@@ -18,6 +18,8 @@ import (
 	"agy-sync/pkg/terminal"
 )
 
+var safeHostCharRegex = regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`)
+
 func ValidateAlias(alias string) (bool, string) {
 	a := strings.ToLower(strings.TrimSpace(alias))
 	if a == "" {
@@ -548,7 +550,7 @@ func ResetAlias(oldTarget string, showCard ...bool) (bool, string) {
 		}
 	}
 
-	cleanDef := strings.ToLower(regexp.MustCompile(`[^a-zA-Z0-9_\-\.]`).ReplaceAllString(defaultName, ""))
+	cleanDef := strings.ToLower(safeHostCharRegex.ReplaceAllString(defaultName, ""))
 	if cleanDef == "" || config.ReservedAliases[cleanDef] {
 		cleanDef = fmt.Sprintf("node-%s", cleanDef)
 	}
