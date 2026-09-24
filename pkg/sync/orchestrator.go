@@ -465,6 +465,7 @@ func SyncAllPeers(verbose bool) {
 	var probedRoutes []probedRoute
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	var bgPingMap sync.Map
 
 	for _, d := range remoteDevices {
 		wg.Add(1)
@@ -482,6 +483,17 @@ func SyncAllPeers(verbose bool) {
 				RouteLat:  rLat,
 			})
 			mu.Unlock()
+
+			// Launch background async ping probe for non-LAN / Tailnet nodes
+			// Runs in parallel while Phase 1 finishes and Phase 2 starts, adding 0.00s delay!
+			if rLat == 0 {
+				go func(peerName, host string, p int) {
+					_, rawH, rawP, _ := config.ParseEndpoint(host, p)
+					if ok, bannerLat, _ := network.ProbeSSHBanner(rawH, rawP, 2500*time.Millisecond); ok {
+						bgPingMap.Store(peerName, bannerLat)
+					}
+				}(name, effH, effP)
+			}
 		}(d.Name, d.TargetSSH, d.Port)
 	}
 
@@ -523,9 +535,16 @@ func SyncAllPeers(verbose bool) {
 	totalNodes := len(probedRoutes)
 
 	for idx, r := range probedRoutes {
+		curLat := r.RouteLat
+		if curLat == 0 {
+			if val, ok := bgPingMap.Load(r.Name); ok {
+				curLat = val.(float64)
+			}
+		}
+
 		latStr := ""
-		if r.RouteLat > 0 {
-			latStr = fmt.Sprintf(" · %.1fms", r.RouteLat)
+		if curLat > 0 {
+			latStr = fmt.Sprintf(" · %.1fms", curLat)
 		}
 		nodePrefix := fmt.Sprintf("[%d/%d] Syncing %s (%s%s)", idx+1, totalNodes, r.Name, r.RouteTier, latStr)
 
@@ -541,7 +560,7 @@ func SyncAllPeers(verbose bool) {
 			Host:      r.EffHost,
 			Port:      r.EffPort,
 			RouteTier: r.RouteTier,
-			Latency:   r.RouteLat,
+			Latency:   curLat,
 		}
 
 		res := SyncWithPeer(r.OrigHost, r.OrigPort, r.Name, verbose, true, route, nodeSpinner)
@@ -565,6 +584,31 @@ func SyncAllPeers(verbose bool) {
 
 	totalElapsed := time.Since(totalT0).Seconds()
 	fmt.Println()
+
+	// Backfill any remaining background pings into results
+	for _, res := range results {
+		if res.RouteLat == 0 {
+			if val, ok := bgPingMap.Load(res.PeerName); ok {
+				res.RouteLat = val.(float64)
+			}
+		}
+	}
+
+	// Sort results for final dashboard: LAN first, then lowest latency, then alphabetical
+	sort.Slice(results, func(i, j int) bool {
+		lanI := strings.Contains(results[i].RouteTier, "LAN")
+		lanJ := strings.Contains(results[j].RouteTier, "LAN")
+		if lanI && !lanJ {
+			return true
+		}
+		if !lanI && lanJ {
+			return false
+		}
+		if results[i].RouteLat > 0 && results[j].RouteLat > 0 && results[i].RouteLat != results[j].RouteLat {
+			return results[i].RouteLat < results[j].RouteLat
+		}
+		return results[i].PeerName < results[j].PeerName
+	})
 
 	// Phase 3: Bento Matrix Table Dashboard
 	terminal.RenderClusterMatrix(results, totalElapsed, successCnt, failCnt)

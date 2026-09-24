@@ -184,6 +184,37 @@ func ShowDevices(verbose bool) {
 		}
 	}
 
+	// Re-sort activeDevices to align with topology: Local first, then LAN Direct (lowest latency), then Tailnet (lowest latency)
+	sort.Slice(activeDevices, func(i, j int) bool {
+		if activeDevices[i].IsLocal != activeDevices[j].IsLocal {
+			return activeDevices[i].IsLocal
+		}
+		tierI := ""
+		tierJ := ""
+		latI := 0.0
+		latJ := 0.0
+		if pI, ok := probeResults[activeDevices[i].Endpoint]; ok {
+			tierI = pI.Route.RouteTier
+			latI = pI.Route.RouteLat
+		}
+		if pJ, ok := probeResults[activeDevices[j].Endpoint]; ok {
+			tierJ = pJ.Route.RouteTier
+			latJ = pJ.Route.RouteLat
+		}
+		lanI := strings.Contains(tierI, "LAN")
+		lanJ := strings.Contains(tierJ, "LAN")
+		if lanI && !lanJ {
+			return true
+		}
+		if !lanI && lanJ {
+			return false
+		}
+		if latI > 0 && latJ > 0 && latI != latJ {
+			return latI < latJ
+		}
+		return activeDevices[i].Alias < activeDevices[j].Alias
+	})
+
 	registryChanged := false
 	var tableRows [][]string
 
