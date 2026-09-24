@@ -284,7 +284,7 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 				cleanList = append(cleanList, fmt.Sprintf("'%s/%s-wal' '%s/%s-shm'", remConv, d, remConv, d))
 			}
 			cleanCmd := strings.Join(cleanList, " ")
-			remoteCmd := fmt.Sprintf("%s mkdir -p '%s' && (tar --warning=no-timestamp -C '%s' -xzf - 2>/dev/null || tar -C '%s' -xzf - 2>/dev/null) && rm -f %s 2>/dev/null || true",
+			remoteCmd := fmt.Sprintf("%s mkdir -p '%s' && (tar --no-same-owner --warning=no-timestamp -C '%s' -xzf - 2>/dev/null || tar -C '%s' --no-same-owner -xzf - 2>/dev/null) && rm -f %s 2>/dev/null || true",
 				config.PathPrefix, remConv, remConv, remConv, cleanCmd)
 
 			sshArgs := ssh.GetSSHCmd(host, port, remoteCmd, true)
@@ -407,7 +407,7 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string) (
 		p1 := exec.Command("tar", "-C", config.AnnDir, "-czf", "-", "-T", "-")
 		p1.Stdin = strings.NewReader(inputList)
 
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' -xzf -", remAnn, remAnn), true)
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remAnn, remAnn), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
@@ -428,7 +428,7 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string) (
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
-		p2 := exec.Command("tar", "-C", config.AnnDir, "-xzf", "-")
+		p2 := exec.Command("tar", "-C", config.AnnDir, "--no-same-owner", "-xzf", "-")
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
 			p2.Stdin = pipe
@@ -533,7 +533,7 @@ if os.path.isdir(b):
 		p1 := exec.Command("tar", "--warning=no-file-changed", "-C", config.BrainDir, "-czf", "-", "-T", "-")
 		p1.Stdin = strings.NewReader(inputList)
 
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' -xzf -", remBrain, remBrain), true)
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remBrain, remBrain), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
@@ -554,7 +554,7 @@ if os.path.isdir(b):
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
-		p2 := exec.Command("tar", "-C", config.BrainDir, "-xzf", "-")
+		p2 := exec.Command("tar", "-C", config.BrainDir, "--no-same-owner", "-xzf", "-")
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
 			p2.Stdin = pipe

@@ -489,7 +489,7 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 		p1 := exec.Command("tar", "-C", config.ConfigDir, "-czf", "-", "-T", "-")
 		p1.Stdin = strings.NewReader(inputList)
 
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' -xzf -", remCfg, remCfg), true)
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remCfg, remCfg), true)
 		p2 := exec.Command("ssh", sshArgs...)
 
 		pipe, err := p1.StdoutPipe()
@@ -783,7 +783,7 @@ else:
 	// Push local to remote
 	if localHasPool {
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=.git", "-czf", "-", "agy-pool")
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -xzf - 2>/dev/null", remHome), true)
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
@@ -829,7 +829,7 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 	if !localHasGo && remoteHasGo {
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' -czf - agy-sync-go", remHome), true)
 		p1 := exec.Command("ssh", sshArgs...)
-		p2 := exec.Command("tar", "-C", config.HomeDir, "-xzf", "-")
+		p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
 			p2.Stdin = pipe
@@ -846,7 +846,7 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 	// 2. Initial deployment: local has it, remote does not -> push
 	if localHasGo && !remoteHasGo {
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "-czf", "-", "agy-sync-go")
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -xzf - 2>/dev/null", remHome), true)
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
@@ -923,7 +923,7 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 
 	if shouldPush {
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "-czf", "-", "agy-sync-go")
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -xzf - 2>/dev/null", remHome), true)
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
@@ -940,7 +940,7 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 		// Remote is newer: pull from remote
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' -czf - agy-sync-go", remHome), true)
 		p1 := exec.Command("ssh", sshArgs...)
-		p2 := exec.Command("tar", "-C", config.HomeDir, "-xzf", "-")
+		p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
 		pipe, err := p1.StdoutPipe()
 		if err == nil {
 			p2.Stdin = pipe

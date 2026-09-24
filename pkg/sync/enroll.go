@@ -340,7 +340,7 @@ fi
 	if _, err := os.Stat(config.AgySyncGoDir); err == nil {
 		fmt.Println("[🐹] Deploying agy-sync-go source repository...")
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude=*.tmp*", "-czf", "-", "agy-sync-go")
-		p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, "tar -C ~ -xzf -", true)...)
+		p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, "tar -C ~ --no-same-owner -xzf -", true)...)
 		pipe, _ := p1.StdoutPipe()
 		p2.Stdin = pipe
 		_ = p1.Start()
@@ -354,7 +354,7 @@ fi
 			fmt.Println("[👥] Deploying agy-pool multi-account engine...")
 			p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=.git", "-czf", "-", "agy-pool")
 			poolSetup := `
-tar -C ~ -xzf -
+tar -C ~ --no-same-owner -xzf -
 if [ -f ~/agy-pool/install.sh ]; then
     bash ~/agy-pool/install.sh >/dev/null 2>&1 || true
 fi
