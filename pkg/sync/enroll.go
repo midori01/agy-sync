@@ -151,12 +151,25 @@ if [ -d "/data/data/com.termux" ]; then
     pkg update -y >/dev/null 2>&1 || true
     pkg install -y openssh python tar curl golang make git >/dev/null 2>&1 || true
 elif command -v apt-get >/dev/null 2>&1; then
-    sudo -n apt-get update -y >/dev/null 2>&1 || true
-    sudo -n apt-get install -y openssh-client openssh-server python3 python3-sqlite3 tar curl iptables golang-go make git >/dev/null 2>&1 || true
+    SUDO=""
+    if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+        SUDO="sudo -n"
+    fi
+    export DEBIAN_FRONTEND=noninteractive
+    $SUDO apt-get update -y >/dev/null 2>&1 || true
+    $SUDO apt-get install -y openssh-client openssh-server python3 python3-sqlite3 tar curl iptables golang-go make git >/dev/null 2>&1 || true
 elif command -v pacman >/dev/null 2>&1; then
-    sudo -n pacman -Sy --noconfirm openssh python tar curl iptables go make git >/dev/null 2>&1 || true
+    SUDO=""
+    if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+        SUDO="sudo -n"
+    fi
+    $SUDO pacman -Sy --noconfirm openssh python tar curl iptables go make git >/dev/null 2>&1 || true
 elif command -v dnf >/dev/null 2>&1; then
-    sudo -n dnf install -y openssh-server openssh-clients python3 tar curl iptables golang make git >/dev/null 2>&1 || true
+    SUDO=""
+    if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+        SUDO="sudo -n"
+    fi
+    $SUDO dnf install -y openssh-server openssh-clients python3 tar curl iptables golang make git >/dev/null 2>&1 || true
 fi
 `
 	_, _, _, _ = ssh.RunSSHCmd(sshTarget, port, pkgSetupScript, false)
@@ -165,11 +178,15 @@ fi
 	if newHostname != "" && newHostname != remoteHostname {
 		fmt.Printf("[🏷️] Setting system hostname to '%s'...\n", newHostname)
 		hnameScript := fmt.Sprintf(`
-sudo -n hostnamectl set-hostname '%s' 2>/dev/null || sudo -n hostname '%s' 2>/dev/null || true
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo -n"
+fi
+$SUDO hostnamectl set-hostname '%s' 2>/dev/null || $SUDO hostname '%s' 2>/dev/null || true
 if [ -f /etc/hosts ]; then
-    sudo -n sed -i 's/127\.0\.1\.1.*/127.0.1.1 %s/' /etc/hosts 2>/dev/null || true
+    $SUDO sed -i 's/127\.0\.1\.1.*/127.0.1.1 %s/' /etc/hosts 2>/dev/null || true
     if ! grep -q '%s' /etc/hosts; then
-        echo "127.0.1.1 %s" | sudo -n tee -a /etc/hosts >/dev/null 2>&1 || true
+        echo "127.0.1.1 %s" | $SUDO tee -a /etc/hosts >/dev/null 2>&1 || true
     fi
 fi
 `, newHostname, newHostname, newHostname, newHostname, newHostname)
@@ -198,10 +215,14 @@ fi
 		if code != 0 {
 			fmt.Println("[🌐] Installing and connecting Tailscale...")
 			tsJoinScript := fmt.Sprintf(`
-if ! command -v tailscale >/dev/null 2>&1; then
-    curl -fsSL https://tailscale.com/install.sh | sudo -n sh >/dev/null 2>&1
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo -n"
 fi
-sudo -n tailscale up --authkey='%s' --hostname='%s' --accept-routes >/dev/null 2>&1
+if ! command -v tailscale >/dev/null 2>&1; then
+    curl -fsSL https://tailscale.com/install.sh | $SUDO sh >/dev/null 2>&1
+fi
+$SUDO tailscale up --authkey='%s' --hostname='%s' --accept-routes >/dev/null 2>&1
 `, tsKey, remoteHostname)
 			_, _, _, _ = ssh.RunSSHCmd(sshTarget, port, tsJoinScript, false)
 		}
@@ -211,9 +232,13 @@ sudo -n tailscale up --authkey='%s' --hostname='%s' --accept-routes >/dev/null 2
 		if tsIP != "" {
 			fmt.Printf("[✅] Tailscale mesh connected: %s\n", tsIP)
 			fwScript := `
-sudo -n iptables -C INPUT -i tailscale0 -j ACCEPT 2>/dev/null || sudo -n iptables -I INPUT 1 -i tailscale0 -j ACCEPT 2>/dev/null || true
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo -n"
+fi
+$SUDO iptables -C INPUT -i tailscale0 -j ACCEPT 2>/dev/null || $SUDO iptables -I INPUT 1 -i tailscale0 -j ACCEPT 2>/dev/null || true
 if command -v systemctl >/dev/null 2>&1; then
-    sudo -n systemctl enable --now ssh 2>/dev/null || sudo -n systemctl enable --now sshd 2>/dev/null || true
+    $SUDO systemctl enable --now ssh 2>/dev/null || $SUDO systemctl enable --now sshd 2>/dev/null || true
 fi
 `
 			_, _, _, _ = ssh.RunSSHCmd(sshTarget, port, fwScript, false)
@@ -226,13 +251,17 @@ fi
 		agyCheck, _, code, _ := ssh.RunSSHCmd(sshTarget, port, "command -v agy >/dev/null 2>&1 && agy --version", false)
 		if code != 0 {
 			fmt.Println("[✨] Installing official Antigravity CLI binary...")
-			agyInstallScript := fmt.Sprintf(`
+			agyInstallScript := `
 if [ ! -d "/data/data/com.termux" ]; then
     curl -fsSL https://antigravity.google/cli/install.sh | bash >/dev/null 2>&1 || true
     mkdir -p ~/.local/bin
-    sudo -n ln -sf /home/%s/.local/bin/agy /usr/local/bin/agy 2>/dev/null || true
+    if [ -w "/usr/local/bin" ]; then
+        ln -sf ~/.local/bin/agy /usr/local/bin/agy 2>/dev/null || true
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo -n ln -sf ~/.local/bin/agy /usr/local/bin/agy 2>/dev/null || true
+    fi
 fi
-`, remoteUser)
+`
 			_, _, _, _ = ssh.RunSSHCmd(sshTarget, port, agyInstallScript, false)
 			agyVer, _, _, _ := ssh.RunSSHCmd(sshTarget, port, "agy --version 2>/dev/null", false)
 			if strings.TrimSpace(agyVer) != "" {
@@ -347,7 +376,7 @@ fi
 		preferredIP = tsIP
 	}
 	preferredEP := fmt.Sprintf("%s:%d", preferredIP, port)
-	if remoteUser != "" && remoteUser != "root" && remoteUser != os.Getenv("USER") {
+	if remoteUser != "" && remoteUser != os.Getenv("USER") {
 		preferredEP = fmt.Sprintf("%s@%s:%d", remoteUser, preferredIP, port)
 	}
 
