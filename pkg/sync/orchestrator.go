@@ -339,14 +339,21 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	// 3.4 Sync Go Synchronizer Source Code (determines git version parity & direction)
 	stepStatus("Go synchronizer source")
 	goSrcStat := SyncAgySyncGo(host, port, remHome, clockSkew, isForce)
+	pulledNewVersion := false
 	if goSrcStat != "none" {
 		recordAsset("Go Synchronizer Source", goSrcStat, "🐹", goSrcStat == "pushed" || goSrcStat == "pulled" || goSrcStat == "installed & ready")
+		if goSrcStat == "pulled" || goSrcStat == "pulled & ready" {
+			pulledNewVersion = true
+		}
 	}
 
 	// 3.5 Sync Engine (uses goSrcStat to safely determine binary build/push/rebuild)
 	stepStatus("Synchronizer engine")
 	binStat := SyncEngine(host, port, remHome, remArch, remCommit, goSrcStat, clockSkew, probeCache, isForce)
 	recordAsset("Synchronizer Engine", binStat, "⚡", binStat == "pushed" || binStat == "pulled" || strings.Contains(binStat, "rebuilt") || strings.Contains(binStat, "compiled"))
+	if strings.Contains(binStat, "rebuilt") || strings.Contains(binStat, "pulled") {
+		pulledNewVersion = true
+	}
 
 	// 3.6 Sync Token
 	stepStatus("Account pool & tokens")
@@ -467,11 +474,12 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	success := !hasFailures
 
 	result := &terminal.SyncResult{
-		Success:     success,
-		HasWarnings: hasWarnings,
-		HasFailures: hasFailures,
-		Warnings:    warnings,
-		Failures:    failures,
+		Success:          success,
+		HasWarnings:      hasWarnings,
+		HasFailures:      hasFailures,
+		PulledNewVersion: pulledNewVersion,
+		Warnings:         warnings,
+		Failures:         failures,
 		PeerName:    peerName,
 		RouteTier:   routeTier,
 		RouteLat:    routeLat,
@@ -666,6 +674,58 @@ func SyncAllPeers(verbose bool, force ...bool) {
 		} else if !verbose {
 			fmt.Println(finalStatus)
 		}
+
+		// Self-healing multi-peer back-propagation:
+		// If local pulled a newer version from this peer, all earlier peers (0..idx-1)
+		// were synced while local was on the old version.
+		// Immediately re-sync those earlier peers so they receive the new version!
+		if res.PulledNewVersion && idx > 0 {
+			if verbose {
+				fmt.Printf("\n[🚀] In-flight upgrade from '%s' detected! Back-propagating new release to %d earlier peer(s)...\n", r.Name, idx)
+			}
+			for prevIdx := 0; prevIdx < idx; prevIdx++ {
+				prevR := probedRoutes[prevIdx]
+				prevLat := prevR.RouteLat
+				if prevLat == 0 {
+					if val, ok := bgPingMap.Load(prevR.Name); ok {
+						prevLat = val.(float64)
+					}
+				}
+				bpPrefix := fmt.Sprintf("[↩️ Back-prop] Upgrading %s to latest release", prevR.Name)
+				var bpSpinner *terminal.Spinner
+				if !verbose {
+					bpSpinner = terminal.NewSpinner(bpPrefix, true)
+					bpSpinner.Start()
+				} else {
+					fmt.Printf("[↩️ Back-prop] Upgrading %s to latest release...\n", prevR.Name)
+				}
+				bpRoute := &PreResolvedRoute{
+					Host:      prevR.EffHost,
+					Port:      prevR.EffPort,
+					RouteTier: prevR.RouteTier,
+					Latency:   prevLat,
+				}
+				bpRes := SyncWithPeer(prevR.OrigHost, prevR.OrigPort, prevR.Name, verbose, true, bpRoute, bpSpinner, isForce)
+				results[prevIdx] = bpRes
+				if bpSpinner != nil {
+					bpFinalStatus := fmt.Sprintf("\033[32m✓\033[0m %s... converged \033[90m(%.2fs)\033[0m", bpPrefix, bpRes.Elapsed)
+					if bpRes.HasWarnings {
+						bpFinalStatus = fmt.Sprintf("\033[33m⚠\033[0m %s... diverged \033[90m(%.2fs)\033[0m", bpPrefix, bpRes.Elapsed)
+					} else if !bpRes.Success || bpRes.HasFailures {
+						bpFinalStatus = fmt.Sprintf("\033[31m✗\033[0m %s... failed \033[90m(%.2fs)\033[0m", bpPrefix, bpRes.Elapsed)
+					}
+					bpSpinner.Stop(bpFinalStatus)
+				} else if !verbose {
+					bpFinalStatus := fmt.Sprintf("\033[32m✓\033[0m %s... converged \033[90m(%.2fs)\033[0m", bpPrefix, bpRes.Elapsed)
+					if bpRes.HasWarnings {
+						bpFinalStatus = fmt.Sprintf("\033[33m⚠\033[0m %s... diverged \033[90m(%.2fs)\033[0m", bpPrefix, bpRes.Elapsed)
+					} else if !bpRes.Success || bpRes.HasFailures {
+						bpFinalStatus = fmt.Sprintf("\033[31m✗\033[0m %s... failed \033[90m(%.2fs)\033[0m", bpPrefix, bpRes.Elapsed)
+					}
+					fmt.Println(bpFinalStatus)
+				}
+			}
+		}
 	}
 
 	totalElapsed := time.Since(totalT0).Seconds()
@@ -703,6 +763,17 @@ func SyncAllPeers(verbose bool, force ...bool) {
 		}
 		return results[i].PeerName < results[j].PeerName
 	})
+
+	// Recompute counts accurately from results
+	successCnt = 0
+	failCnt = 0
+	for _, res := range results {
+		if res.Success && !res.HasFailures && !res.HasWarnings {
+			successCnt++
+		} else if !res.Success || res.HasFailures {
+			failCnt++
+		}
+	}
 
 	// Phase 3: Bento Matrix Table Dashboard
 	terminal.RenderClusterMatrix(results, totalElapsed, successCnt, failCnt)

@@ -1094,30 +1094,42 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64, for
 		remDirty = false
 	}
 
-	if locHash != "" && remHash != "" && locHash == remHash && !locDirty && !remDirty {
-		return "identical"
+	// Case 1: Commits are identical
+	if locHash != "" && remHash != "" && locHash == remHash {
+		if !locDirty && !remDirty {
+			return "identical"
+		}
+		if remDirty && !locDirty {
+			// Remote has active in-progress edits on top of the same commit.
+			// Never wipe remote's in-progress work!
+			return "identical (remote working tree preserved)"
+		}
+		if locDirty && !remDirty {
+			// Local has uncommitted work to push to remote
+		} else if locDirty && remDirty {
+			if !isForce {
+				return "conflict (both dirty)"
+			}
+		}
 	}
 
-	// Conflict protection: if both sides are dirty with uncommitted edits, never overwrite either side unless force
-	if !isForce && locDirty && remDirty {
+	// Case 2 & 3: Commits differ
+	// If both sides are dirty with uncommitted edits, protect against collision unless force
+	if !isForce && locDirty && remDirty && locHash != remHash {
 		return "conflict (both dirty)"
 	}
-	// Safety protection: if remote is dirty and local is clean, never overwrite remote's uncommitted work unless force
-	if !isForce && remDirty && !locDirty {
-		return "remote modified (dirty)"
-	}
 
-	// Determine direction:
-	// If local has uncommitted work (locDirty) or force, local takes precedence to push
-	// If both are clean, compare commit timestamps
+	// Determine direction based on commit timestamps
+	// If local commit is strictly newer (or local dirty while remote clean): push
+	// If remote commit is strictly newer: pull
 	shouldPush := false
-	if isForce || (locDirty && !remDirty) || locTime >= remTime {
+	if isForce || (locDirty && !remDirty) || locTime > remTime || (locTime == remTime && locHash >= remHash) {
 		shouldPush = true
 	}
 
 	if shouldPush {
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("git -C '%s' checkout . 2>/dev/null; git -C '%s' clean -fd 2>/dev/null; tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remGoDir, remGoDir, remHome), true)
+		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("git -C '%s' checkout . 2>/dev/null; git -C '%s' clean -fd 2>/dev/null; tar -C '%s' --no-same-owner -xzf - 2>/dev/null && git -C '%s' checkout . 2>/dev/null", remGoDir, remGoDir, remHome, remGoDir), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		if err := RunPipedCommands(p1, p2); err == nil {
 			return "pushed"
@@ -1125,10 +1137,13 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64, for
 		return "failed"
 	} else {
 		// Remote is newer: pull from remote
+		_ = exec.Command("git", "-C", config.AgySyncGoDir, "checkout", ".").Run()
+		_ = exec.Command("git", "-C", config.AgySyncGoDir, "clean", "-fd").Run()
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' --exclude=.git/index.lock -czf - agy-sync-go", remHome), true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
 		if err := RunPipedCommands(p1, p2); err == nil {
+			_ = exec.Command("git", "-C", config.AgySyncGoDir, "checkout", ".").Run()
 			return "pulled"
 		}
 		return "failed"

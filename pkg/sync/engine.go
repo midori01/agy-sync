@@ -121,8 +121,8 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 
 	isForce := len(force) > 0 && force[0]
 
-	// 1. 1-RTT Commit Match: If binary commits match, 100% identical across any architecture
-	if remCommit != "" && remCommit != "NONE" && remCommit != "dev" && config.GitCommit != "dev" && remCommit == config.GitCommit {
+	// 1. 1-RTT Commit Match: If binary commits match and not forced, 100% identical across any architecture
+	if !isForce && remCommit != "" && remCommit != "NONE" && remCommit != "dev" && config.GitCommit != "dev" && remCommit == config.GitCommit {
 		return "identical"
 	}
 
@@ -144,6 +144,13 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 					_ = os.Rename(tmpLocal, config.AgySyncScript)
 					_ = os.Chmod(config.AgySyncScript, 0755)
 					config.GitCommit = newCommit
+					if _, err := os.Stat("/data/data/com.termux/files/usr/bin"); err == nil {
+						_ = os.Remove("/data/data/com.termux/files/usr/bin/agy-sync")
+						_ = os.Symlink(config.AgySyncScript, "/data/data/com.termux/files/usr/bin/agy-sync")
+					}
+					_ = os.MkdirAll(filepath.Join(config.HomeDir, ".local", "bin"), 0755)
+					_ = os.Remove(filepath.Join(config.HomeDir, ".local", "bin", "agy-sync"))
+					_ = os.Symlink(config.AgySyncScript, filepath.Join(config.HomeDir, ".local", "bin", "agy-sync"))
 					return "pulled & rebuilt locally"
 				}
 				_ = os.Remove(tmpLocal)
@@ -158,6 +165,13 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 				_ = os.Rename(tmpLocal, config.AgySyncScript)
 				_ = os.Chmod(config.AgySyncScript, 0755)
 				config.GitCommit = remCommit
+				if _, err := os.Stat("/data/data/com.termux/files/usr/bin"); err == nil {
+					_ = os.Remove("/data/data/com.termux/files/usr/bin/agy-sync")
+					_ = os.Symlink(config.AgySyncScript, "/data/data/com.termux/files/usr/bin/agy-sync")
+				}
+				_ = os.MkdirAll(filepath.Join(config.HomeDir, ".local", "bin"), 0755)
+				_ = os.Remove(filepath.Join(config.HomeDir, ".local", "bin", "agy-sync"))
+				_ = os.Symlink(config.AgySyncScript, filepath.Join(config.HomeDir, ".local", "bin", "agy-sync"))
 				return "pulled binary from peer"
 			}
 			_ = os.Remove(tmpLocal)
@@ -166,18 +180,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 		return "pulled"
 	}
 
-	// 3. Conflict and Dirty Protection:
-	// Only guard against binary overwrite if remote has an uncommitted development binary (remCommit == "dev")
-	// and source diverged, unless force flag is specified.
-	// When remCommit is a known older git commit, remote's binary is strictly an outdated release,
-	// so the new production release must be pushed to keep the cluster executable up to date!
-	if !isForce && (strings.Contains(goSrcStat, "dirty") || strings.Contains(goSrcStat, "conflict")) {
-		if remCommit == "dev" {
-			return "safety guard (source diverged)"
-		}
-	}
-
-	// 4. Same-Architecture Direct Byte Check (Fallback for dev or unversioned binaries)
+	// 3. Same-Architecture Direct Byte Check (Fallback for dev or unversioned binaries)
 	isRemSameArch := (strings.Contains(remArch, "x86_64") || strings.Contains(remArch, "amd64")) == (runtime.GOARCH == "amd64")
 
 	if isRemSameArch {
@@ -200,7 +203,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 		}
 	}
 
-	// 5. If source was identical or pushed (local was newer), resolve target binary content
+	// 4. If source was identical or pushed (local was newer), resolve target binary content
 	targetContent, err := GetOrBuildTargetBinary(remArch)
 	if err != nil || len(targetContent) == 0 {
 		// Local has no Go compiler to cross-compile: ask remote to build for itself if remote has Go!
@@ -213,7 +216,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 		return "skipped (cross-arch build requires Go compiler)"
 	}
 
-	// 6. Push binary to remote
+	// 5. Push binary to remote
 	remParent := filepath.Dir(remBin)
 	tmpRem := fmt.Sprintf("%s.tmp_%d_%s", remBin, time.Now().UnixNano(), randomToken(3))
 	remTargetMTime := fi.ModTime().Unix() + int64(clockSkew)

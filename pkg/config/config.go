@@ -48,7 +48,7 @@ var (
 )
 
 var (
-	Version   = "8.1"
+	Version   = "8.2"
 	GitCommit = "dev"
 )
 
@@ -740,7 +740,7 @@ func EnsureSelfUpToDate() {
 		return
 	}
 	dirty := ""
-	if out, err := exec.Command("git", "-C", AgySyncGoDir, "status", "--porcelain").Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
+	if out, err := exec.Command("git", "-C", AgySyncGoDir, "status", "--porcelain", "--untracked-files=no").Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
 		dirty = "-dirty"
 	}
 	expectedCommit := headCommit + dirty

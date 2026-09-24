@@ -19,11 +19,12 @@ type SyncResult struct {
 	RouteLat    float64
 	ClockSkew   float64
 	Elapsed     float64
-	Success     bool
-	HasWarnings bool
-	HasFailures bool
-	Warnings    []ChangeItem
-	Failures    []ChangeItem
+	Success          bool
+	HasWarnings      bool
+	HasFailures      bool
+	PulledNewVersion bool
+	Warnings         []ChangeItem
+	Failures         []ChangeItem
 	Error       string
 	Changes     []ChangeItem
 	Unchanged   []string
@@ -276,7 +277,7 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 	lines = append(lines, MakeTableDivider(colWidths, "├", "┴", "┤"))
 	footer := fmt.Sprintf("✨ Cluster Sync: %d/%d nodes synced in %.2fs (%d failed)", successCnt, len(results), totalElapsed, failCnt)
 	if warnCnt > 0 && failCnt == 0 {
-		footer = fmt.Sprintf("⚠️ Cluster Sync: %d/%d synced, %d diverged in %.2fs", successCnt-warnCnt, len(results), warnCnt, totalElapsed)
+		footer = fmt.Sprintf("⚠️ Cluster Sync: %d/%d synced, %d diverged in %.2fs", successCnt, len(results), warnCnt, totalElapsed)
 	} else if failCnt > 0 {
 		footer = fmt.Sprintf("❌ Cluster Sync: %d/%d succeeded, %d failed in %.2fs", successCnt, len(results), failCnt, totalElapsed)
 	}
