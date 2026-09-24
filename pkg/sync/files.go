@@ -464,7 +464,11 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 			} else if strings.Contains(fullPath, "config/") {
 				rel = fullPath[strings.Index(fullPath, "config/")+7:]
 			}
-			remoteFiles[rel] = [2]int64{remMTime, sz}
+			cleanRel := filepath.Clean(rel)
+			if cleanRel == "." || strings.HasPrefix(cleanRel, "..") || filepath.IsAbs(cleanRel) {
+				continue
+			}
+			remoteFiles[cleanRel] = [2]int64{remMTime, sz}
 		}
 	}
 
@@ -493,15 +497,8 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remCfg, remCfg), true)
 		p2 := exec.Command("ssh", sshArgs...)
 
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				pushedCnt = len(toPush)
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			pushedCnt = len(toPush)
 		}
 	}
 
@@ -513,15 +510,8 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 		p1.Stdin = strings.NewReader(inputList)
 
 		p2 := exec.Command("tar", "-C", config.ConfigDir, "--no-same-owner", "-xzf", "-")
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				pulledCnt = len(toPull)
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			pulledCnt = len(toPull)
 		}
 	}
 
@@ -586,13 +576,17 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 	// Superset union
 	var localData map[string]interface{}
 	if data, err := os.ReadFile(config.PoolAccountsFile); err == nil {
-		_ = json.Unmarshal(data, &localData)
+		if err := json.Unmarshal(data, &localData); err != nil {
+			return "failed (local accounts.json corrupted)"
+		}
 	}
 
 	stdout, _, _, _ := ssh.RunSSHCmd(host, port, fmt.Sprintf("cat '%s' 2>/dev/null", remPoolCfg), false)
 	var remoteData map[string]interface{}
 	if stdout != "" {
-		_ = json.Unmarshal([]byte(stdout), &remoteData)
+		if err := json.Unmarshal([]byte(stdout), &remoteData); err != nil {
+			return "failed (remote accounts.json corrupted)"
+		}
 	}
 
 	extractAccs := func(m map[string]interface{}) []map[string]interface{} {
@@ -952,16 +946,9 @@ else:
 			sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=.git -czf - agy-pool", remHome), true)
 			p1 := exec.Command("ssh", sshArgs...)
 			p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
-			pipe, err := p1.StdoutPipe()
-			if err == nil {
-				p2.Stdin = pipe
-				_ = p1.Start()
-				_ = p2.Start()
-				_ = p1.Wait()
-				if err := p2.Wait(); err == nil {
-					_ = os.Chmod(localBin, 0755)
-					return "pulled & ready"
-				}
+			if err := RunPipedCommands(p1, p2); err == nil {
+				_ = os.Chmod(localBin, 0755)
+				return "pulled & ready"
 			}
 			return "failed"
 		}
@@ -972,25 +959,18 @@ else:
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=.git", "-czf", "-", "agy-pool")
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				postCmd := fmt.Sprintf(`chmod +x '%s/bin/agy-pool' '%s/install.sh' 2>/dev/null || true;
+		if err := RunPipedCommands(p1, p2); err == nil {
+			postCmd := fmt.Sprintf(`chmod +x '%s/bin/agy-pool' '%s/install.sh' 2>/dev/null || true;
 if [ -w /usr/local/bin ] || [ "$(id -u)" -eq 0 ]; then
   ln -sf '%s/bin/agy-pool' /usr/local/bin/agy-pool 2>/dev/null || true;
 elif [ -d /data/data/com.termux/files/usr/bin ]; then
   ln -sf '%s/bin/agy-pool' /data/data/com.termux/files/usr/bin/agy-pool 2>/dev/null || true;
 fi`, remPoolDir, remPoolDir, remPoolDir, remPoolDir)
-				_, _, _, _ = ssh.RunSSHCmd(host, port, postCmd, false)
-				if !remoteHasPool {
-					return "installed & ready"
-				}
-				return "up-to-date"
+			_, _, _, _ = ssh.RunSSHCmd(host, port, postCmd, false)
+			if !remoteHasPool {
+				return "installed & ready"
 			}
+			return "up-to-date"
 		}
 		return "failed"
 	}
@@ -1019,15 +999,8 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' -czf - agy-sync-go", remHome), true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				return "pulled & ready"
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			return "pulled & ready"
 		}
 		return "failed"
 	}
@@ -1037,15 +1010,8 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "-czf", "-", "agy-sync-go")
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				return "installed & ready"
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			return "installed & ready"
 		}
 		return "failed"
 	}
@@ -1111,15 +1077,8 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "-czf", "-", "agy-sync-go")
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				return "pushed"
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			return "pushed"
 		}
 		return "failed"
 	} else {
@@ -1127,15 +1086,8 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64) str
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' -czf - agy-sync-go", remHome), true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				return "pulled"
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			return "pulled"
 		}
 		return "failed"
 	}

@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"agy-sync/pkg/cluster"
 	"agy-sync/pkg/config"
@@ -73,6 +75,17 @@ func main() {
 		}
 	}
 
+	// Intercept SIGINT / SIGTERM to cleanly restore cursor and erase spinner artifacts
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		fmt.Print("\r\033[K\033[?25h")
+		os.Exit(130)
+	}()
+	defer fmt.Print("\033[?25h")
+
+	ssh.CleanupStaleControlSockets()
 	config.EnsureTermuxEnvironment()
 	config.EnsureSelfUpToDate()
 	cluster.ReconcileRegistry()

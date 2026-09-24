@@ -191,8 +191,17 @@ else:
 func SafeDBSnapshot(src, dst string) error {
 	walFile := src + "-wal"
 	if fi, err := os.Stat(walFile); err == nil && fi.Size() > 0 {
-		pyCmd := fmt.Sprintf(`python3 -c "import sqlite3; s = sqlite3.connect('file:%s?mode=ro', uri=True); d = sqlite3.connect('%s'); s.backup(d); d.close(); s.close()" 2>/dev/null`, src, dst)
-		if err := exec.Command("sh", "-c", pyCmd).Run(); err == nil {
+		script := `import sqlite3, sys
+try:
+    s = sqlite3.connect(f'file:{sys.argv[1]}?mode=ro', uri=True)
+    d = sqlite3.connect(sys.argv[2])
+    s.backup(d)
+    d.close()
+    s.close()
+except Exception:
+    sys.exit(1)
+`
+		if err := exec.Command("python3", "-c", script, src, dst).Run(); err == nil {
 			if fiDst, err := os.Stat(dst); err == nil && fiDst.Size() > 0 {
 				return nil
 			}
@@ -266,37 +275,34 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 		if err == nil {
 			defer os.RemoveAll(stagingDir)
 
+			var validPush []string
 			for _, dbName := range toPush {
 				srcFile := filepath.Join(config.ConvDir, dbName)
 				dstFile := filepath.Join(stagingDir, dbName)
-				// Make safe copy/snapshot
-				_ = SafeDBSnapshot(srcFile, dstFile)
-				if fi, err := os.Stat(srcFile); err == nil {
-					_ = os.Chtimes(dstFile, fi.ModTime(), fi.ModTime())
+				if err := SafeDBSnapshot(srcFile, dstFile); err == nil {
+					if fi, err := os.Stat(srcFile); err == nil {
+						_ = os.Chtimes(dstFile, fi.ModTime(), fi.ModTime())
+					}
+					validPush = append(validPush, dbName)
 				}
 			}
 
-			tarArgs := append([]string{"-C", stagingDir, "-czf", "-"}, toPush...)
-			p1 := exec.Command("tar", tarArgs...)
+			if len(validPush) > 0 {
+				tarArgs := append([]string{"-C", stagingDir, "-czf", "-"}, validPush...)
+				p1 := exec.Command("tar", tarArgs...)
 
-			var cleanList []string
-			for _, d := range toPush {
-				cleanList = append(cleanList, fmt.Sprintf("'%s/%s-wal' '%s/%s-shm'", remConv, d, remConv, d))
-			}
-			cleanCmd := strings.Join(cleanList, " ")
-			remoteCmd := fmt.Sprintf("%s mkdir -p '%s' && (tar --no-same-owner --warning=no-timestamp -C '%s' -xzf - 2>/dev/null || tar -C '%s' --no-same-owner -xzf - 2>/dev/null) && rm -f %s 2>/dev/null || true",
-				config.PathPrefix, remConv, remConv, remConv, cleanCmd)
+				var cleanList []string
+				for _, d := range validPush {
+					cleanList = append(cleanList, fmt.Sprintf("'%s/%s-wal' '%s/%s-shm'", remConv, d, remConv, d))
+				}
+				cleanCmd := strings.Join(cleanList, " ")
+				remoteCmd := fmt.Sprintf("%s mkdir -p '%s' && (tar --no-same-owner --warning=no-timestamp -C '%s' -xzf - 2>/dev/null || tar -C '%s' --no-same-owner -xzf - 2>/dev/null) && rm -f %s 2>/dev/null || true",
+					config.PathPrefix, remConv, remConv, remConv, cleanCmd)
 
-			sshArgs := ssh.GetSSHCmd(host, port, remoteCmd, true)
-			p2 := exec.Command("ssh", sshArgs...)
-			pipe, err := p1.StdoutPipe()
-			if err == nil {
-				p2.Stdin = pipe
-				_ = p1.Start()
-				_ = p2.Start()
-				_ = p1.Wait()
-				if err := p2.Wait(); err == nil {
-					pushedCount = len(toPush)
+				sshArgs := ssh.GetSSHCmd(host, port, remoteCmd, true)
+				p2 := exec.Command("ssh", sshArgs...)
+				if err := RunPipedCommands(p1, p2); err == nil {
+					pushedCount = len(validPush)
 				}
 			}
 		}
@@ -305,7 +311,7 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 	pulledCount := 0
 	if len(toPull) > 0 {
 		remotePullPy := fmt.Sprintf(`
-import sqlite3, tempfile, shutil, os, sys
+import sqlite3, tempfile, shutil, os, sys, subprocess
 from pathlib import Path
 c = Path('%s')
 td = tempfile.mkdtemp()
@@ -328,8 +334,8 @@ for d in items:
             os.utime(sp, (st.st_atime, st.st_mtime))
         except Exception: pass
     if sp.is_file(): valid.append(d)
-args_str = " ".join([f'"{x}"' for x in valid])
-os.system(f'tar -C {td} -czf - {args_str} 2>/dev/null')
+if valid:
+    subprocess.run(["tar", "-C", td, "-czf", "-"] + valid, stderr=subprocess.DEVNULL)
 shutil.rmtree(td, ignore_errors=True)
 `, remConv)
 
@@ -341,15 +347,8 @@ shutil.rmtree(td, ignore_errors=True)
 		p1.Stdin = strings.NewReader(strings.Join(toPull, "\n") + "\n")
 
 		p2 := exec.Command("tar", "-C", config.ConvDir, "--no-same-owner", "-xzf", "-")
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				pulledCount = len(toPull)
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			pulledCount = len(toPull)
 		}
 	}
 
@@ -409,15 +408,8 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string) (
 
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remAnn, remAnn), true)
 		p2 := exec.Command("ssh", sshArgs...)
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				pushed = len(toPush)
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			pushed = len(toPush)
 		}
 	}
 
@@ -429,15 +421,8 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string) (
 		p1.Stdin = strings.NewReader(inputList)
 
 		p2 := exec.Command("tar", "-C", config.AnnDir, "--no-same-owner", "-xzf", "-")
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				pulled = len(toPull)
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			pulled = len(toPull)
 		}
 	}
 
@@ -535,15 +520,8 @@ if os.path.isdir(b):
 
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remBrain, remBrain), true)
 		p2 := exec.Command("ssh", sshArgs...)
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				pushedCount = len(toPush)
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			pushedCount = len(toPush)
 		}
 	}
 
@@ -555,15 +533,8 @@ if os.path.isdir(b):
 		p1.Stdin = strings.NewReader(inputList)
 
 		p2 := exec.Command("tar", "-C", config.BrainDir, "--no-same-owner", "-xzf", "-")
-		pipe, err := p1.StdoutPipe()
-		if err == nil {
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			if err := p2.Wait(); err == nil {
-				pulledCount = len(toPull)
-			}
+		if err := RunPipedCommands(p1, p2); err == nil {
+			pulledCount = len(toPull)
 		}
 	}
 

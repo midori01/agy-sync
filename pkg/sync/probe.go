@@ -5,8 +5,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -89,7 +91,7 @@ func GetPeerClockSkew(host string, port int) float64 {
 
 	localMidpoint := float64(t0.UnixNano())/1e9 + (rtt / 2.0)
 	skew := remoteTS - localMidpoint
-	return float64(int(skew*1000+0.5)) / 1000.0
+	return math.Round(skew*1000) / 1000.0
 }
 
 func BatchProbeRemoteFiles(host string, port int, remotePaths []string) map[string]*RemoteFileInfo {
@@ -168,12 +170,29 @@ func CopyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
+	_ = os.MkdirAll(filepath.Dir(dst), 0755)
+	tmpDst := dst + fmt.Sprintf(".tmp_%d", time.Now().UnixNano())
+	out, err := os.Create(tmpDst)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
-	_, err = io.Copy(out, in)
-	return err
+	_, copyErr := io.Copy(out, in)
+	syncErr := out.Sync()
+	closeErr := out.Close()
+
+	if copyErr != nil {
+		_ = os.Remove(tmpDst)
+		return copyErr
+	}
+	if syncErr != nil {
+		_ = os.Remove(tmpDst)
+		return syncErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmpDst)
+		return closeErr
+	}
+
+	return os.Rename(tmpDst, dst)
 }

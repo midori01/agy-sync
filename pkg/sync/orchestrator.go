@@ -664,7 +664,7 @@ Arguments:
 			remParent := filepath.Dir(remSettings)
 			tmpRemote := fmt.Sprintf("%s.tmp_push_%d_%s", remSettings, time.Now().Unix(), randomToken(3))
 
-			pushCmd := fmt.Sprintf("mkdir -p '%s' && (cat > '%s' && chmod 600 '%s' && touch -d @%d '%s' && mv -f '%s' '%s' && touch -d @%d '%s' || (rm -f '%s' 2>/dev/null; false))",
+			pushCmd := fmt.Sprintf("mkdir -p '%s' && (cat > '%s' && chmod 600 '%s' && (touch -d @%d '%s' 2>/dev/null || true) && mv -f '%s' '%s' && (touch -d @%d '%s' 2>/dev/null || true) || (rm -f '%s' 2>/dev/null; false))",
 				remParent, tmpRemote, tmpRemote, remTargetMTime, tmpRemote, tmpRemote, remSettings, remTargetMTime, remSettings, tmpRemote)
 
 			sshArgs := ssh.GetSSHCmd(effH, effP, pushCmd, true)
@@ -794,7 +794,7 @@ Arguments:
 			remParent := filepath.Dir(remPool)
 			tmpRemote := fmt.Sprintf("%s.tmp_push_pool_%d_%s", remPool, time.Now().Unix(), randomToken(3))
 
-			pushCmd := fmt.Sprintf("mkdir -p '%s' && (cat > '%s' && chmod 600 '%s' && touch -d @%d '%s' && mv -f '%s' '%s' && touch -d @%d '%s' || (rm -f '%s' 2>/dev/null; false))",
+			pushCmd := fmt.Sprintf("mkdir -p '%s' && (cat > '%s' && chmod 600 '%s' && (touch -d @%d '%s' 2>/dev/null || true) && mv -f '%s' '%s' && (touch -d @%d '%s' 2>/dev/null || true) || (rm -f '%s' 2>/dev/null; false))",
 				remParent, tmpRemote, tmpRemote, remTargetMTime, tmpRemote, tmpRemote, remPool, remTargetMTime, remPool, tmpRemote)
 
 			sshArgs := ssh.GetSSHCmd(effH, effP, pushCmd, true)

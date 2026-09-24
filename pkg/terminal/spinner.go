@@ -65,6 +65,7 @@ func (s *Spinner) Start() {
 	}
 	s.running = true
 	s.t0 = time.Now()
+	s.lastLineLen = 0
 	s.stopChan = make(chan struct{})
 	s.doneChan = make(chan struct{})
 	s.mu.Unlock()

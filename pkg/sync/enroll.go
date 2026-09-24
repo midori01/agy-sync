@@ -407,12 +407,7 @@ fi
 		fmt.Println("[🐹] Deploying agy-sync-go source repository...")
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude=*.tmp*", "-czf", "-", "agy-sync-go")
 		p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, "tar -C ~ --no-same-owner -xzf -", true)...)
-		pipe, _ := p1.StdoutPipe()
-		p2.Stdin = pipe
-		_ = p1.Start()
-		_ = p2.Start()
-		_ = p1.Wait()
-		_ = p2.Wait()
+		_ = RunPipedCommands(p1, p2)
 	}
 
 	if installPool {
@@ -426,12 +421,7 @@ if [ -f ~/agy-pool/install.sh ]; then
 fi
 `
 			p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, poolSetup, true)...)
-			pipe, _ := p1.StdoutPipe()
-			p2.Stdin = pipe
-			_ = p1.Start()
-			_ = p2.Start()
-			_ = p1.Wait()
-			_ = p2.Wait()
+			_ = RunPipedCommands(p1, p2)
 		}
 	}
 
@@ -551,6 +541,7 @@ func CmdPair(args []string) {
 	mux := http.NewServeMux()
 	var server *http.Server
 	var pairedName string
+	var pairMu sync.Mutex
 	var once sync.Once
 
 	mux.HandleFunc(fmt.Sprintf("/join/%s", token), func(w http.ResponseWriter, r *http.Request) {
@@ -616,7 +607,9 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 		if peerPub != "" {
 			reg := config.LoadRegistry()
 			alias := cluster.GetUniqueAlias(peerName, peerPub, reg)
+			pairMu.Lock()
 			pairedName = fmt.Sprintf("%s (%s)", alias, peerName)
+			pairMu.Unlock()
 
 			var ips []string
 			for _, ip := range strings.Split(peerLanIPs, ",") {
@@ -689,7 +682,10 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 	}()
 
 	_ = server.ListenAndServe()
-	if pairedName != "" {
-		fmt.Printf("\n[✅] Successfully paired and enrolled new device '%s'! 🎉\n", pairedName)
+	pairMu.Lock()
+	pName := pairedName
+	pairMu.Unlock()
+	if pName != "" {
+		fmt.Printf("\n[✅] Successfully paired and enrolled new device '%s'! 🎉\n", pName)
 	}
 }

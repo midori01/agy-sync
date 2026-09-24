@@ -54,7 +54,7 @@ const (
 	SSHConfigMarkerEnd    = "# <<< agy-sync cluster devices <<<"
 	ShellPeerMarkerStart  = "# >>> agy-sync ssh peer integration >>>"
 	ShellPeerMarkerEnd    = "# <<< agy-sync ssh peer integration <<<"
-	PathPrefix            = "export PATH=$HOME/.gemini/antigravity-cli/bin:$HOME/.local/bin:/data/data/com.termux/files/usr/bin:/usr/local/bin:/usr/bin:/bin:$PATH;"
+	PathPrefix            = "export PATH=$HOME/.gemini/antigravity-cli/bin:$HOME/.local/bin:/usr/local/go/bin:/data/data/com.termux/files/usr/bin:/usr/local/bin:/usr/bin:/bin:$PATH;"
 )
 
 var ReservedAliases = map[string]bool{
@@ -135,6 +135,7 @@ func LoadConfig() IniConfig {
 	defer f.Close()
 
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	currentSection := ""
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -161,10 +162,11 @@ func LoadConfig() IniConfig {
 func SaveConfig(cfg IniConfig) error {
 	_ = os.MkdirAll(filepath.Dir(ConfFile), 0755)
 	tmpPath := ConfFile + fmt.Sprintf(".tmp_%d", time.Now().UnixNano())
-	f, err := os.Create(tmpPath)
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
+	defer os.Remove(tmpPath)
 
 	w := bufio.NewWriter(f)
 	// Order sections standardly
@@ -212,7 +214,7 @@ func LoadRegistry() Registry {
 
 func SaveRegistry(reg Registry) error {
 	_ = os.MkdirAll(filepath.Dir(DevicesJSONFile), 0755)
-	tmpPath := DevicesJSONFile + ".tmp"
+	tmpPath := fmt.Sprintf("%s.tmp_%d", DevicesJSONFile, time.Now().UnixNano())
 	data, err := json.MarshalIndent(reg, "", "  ")
 	if err != nil {
 		return err
@@ -221,6 +223,7 @@ func SaveRegistry(reg Registry) error {
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return err
 	}
+	defer os.Remove(tmpPath)
 	return os.Rename(tmpPath, DevicesJSONFile)
 }
 
@@ -661,7 +664,10 @@ func EnsureTermuxEnvironment() {
 		}
 		if path, err := exec.LookPath("sshd"); err == nil {
 			running := false
-			if pgrep, err := exec.LookPath("pgrep"); err == nil {
+			if conn, err := net.DialTimeout("tcp", "127.0.0.1:8022", 80*time.Millisecond); err == nil {
+				_ = conn.Close()
+				running = true
+			} else if pgrep, err := exec.LookPath("pgrep"); err == nil {
 				if out, err := exec.Command(pgrep, "-x", "sshd").Output(); err == nil && len(strings.TrimSpace(string(out))) > 0 {
 					running = true
 				}

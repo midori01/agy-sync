@@ -3,6 +3,8 @@ package ssh
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"agy-sync/pkg/config"
 	"agy-sync/pkg/network"
@@ -68,6 +71,55 @@ func RunSSHCmd(host string, port int, cmd string, check bool, connectTimeout ...
 		err = fmt.Errorf("ssh command failed with exit code %d: %s (%s)", exitCode, stderr, err)
 	}
 	return
+}
+
+// RunSSHCmdWithStdin runs a remote command over SSH while streaming input from stdin.
+func RunSSHCmdWithStdin(host string, port int, cmd string, stdin io.Reader, check bool, connectTimeout ...int) (stdout, stderr string, exitCode int, err error) {
+	sshArgs := GetSSHCmd(host, port, cmd, true, connectTimeout...)
+	proc := exec.Command("ssh", sshArgs...)
+	proc.Stdin = stdin
+
+	var outBuf, errBuf bytes.Buffer
+	proc.Stdout = &outBuf
+	proc.Stderr = &errBuf
+
+	err = proc.Run()
+	stdout = outBuf.String()
+	stderr = errBuf.String()
+
+	if proc.ProcessState != nil {
+		exitCode = proc.ProcessState.ExitCode()
+	}
+
+	if err != nil && check {
+		err = fmt.Errorf("ssh command failed with exit code %d: %s (%s)", exitCode, stderr, err)
+	}
+	return
+}
+
+// ShellEscape returns a single-quote wrapped string safely escaped for POSIX shells.
+func ShellEscape(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// CleanupStaleControlSockets checks all master sockets in SocketDir and removes dead ones.
+func CleanupStaleControlSockets() {
+	entries, err := os.ReadDir(config.SocketDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "cm-") {
+			sockPath := filepath.Join(config.SocketDir, e.Name())
+			conn, err := net.DialTimeout("unix", sockPath, 100*time.Millisecond)
+			if err != nil {
+				// Socket is not responding or connection refused: remove stale file
+				_ = os.Remove(sockPath)
+			} else {
+				_ = conn.Close()
+			}
+		}
+	}
 }
 
 func ReconcileSSHConfig(reg ...config.Registry) {

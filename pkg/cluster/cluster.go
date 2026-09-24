@@ -508,8 +508,8 @@ func BroadcastAuthorizedKeyToOnlinePeers(pubkey string) {
 			wg.Add(1)
 			go func(d DeviceTarget) {
 				defer wg.Done()
-				cmd := fmt.Sprintf("mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '%s' >> ~/.ssh/authorized_keys && sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys", pubkey)
-				_, _, _, _ = ssh.RunSSHCmd(d.TargetSSH, d.Port, cmd, false)
+				cmd := "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && sort -u ~/.ssh/authorized_keys -o ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys"
+				_, _, _, _ = ssh.RunSSHCmdWithStdin(d.TargetSSH, d.Port, cmd, strings.NewReader(pubkey+"\n"), false)
 			}(dev)
 		}
 	}
