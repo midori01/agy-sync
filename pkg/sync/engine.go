@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +37,10 @@ func SyncEngine(host string, port int, remHome string, remArch string, clockSkew
 	locMTime := fi.ModTime().Unix()
 
 	remIsTermux := strings.Contains(remHome, "/data/data/com.termux")
+	localIsTermux := false
+	if fi, err := os.Stat("/data/data/com.termux"); err == nil && fi.IsDir() {
+		localIsTermux = true
+	}
 	isELF := len(localContent) >= 4 && bytes.Equal(localContent[:4], []byte{0x7f, 'E', 'L', 'F'})
 
 	var targetContent []byte
@@ -47,8 +52,10 @@ func SyncEngine(host string, port int, remHome string, remArch string, clockSkew
 			androidBin := filepath.Join(binDir, "agy-sync-android-arm64")
 			if data, err := os.ReadFile(androidBin); err == nil {
 				targetContent = data
-			} else {
+			} else if localIsTermux {
 				targetContent = localContent
+			} else {
+				return "none" // Safety: Linux node without android binary must never push linux binary as android
 			}
 		} else {
 			// Remote is Linux VPS: match architecture dynamically (amd64 / x86_64 vs arm64 / aarch64)
@@ -57,15 +64,19 @@ func SyncEngine(host string, port int, remHome string, remArch string, clockSkew
 				linuxAmdBin := filepath.Join(binDir, "agy-sync-linux-amd64")
 				if data, err := os.ReadFile(linuxAmdBin); err == nil {
 					targetContent = data
-				} else {
+				} else if !localIsTermux && runtime.GOARCH == "amd64" {
 					targetContent = localContent
+				} else {
+					return "none" // Safety: missing AMD64 binary
 				}
 			} else {
 				linuxArmBin := filepath.Join(binDir, "agy-sync-linux-arm64")
 				if data, err := os.ReadFile(linuxArmBin); err == nil {
 					targetContent = data
-				} else {
+				} else if !localIsTermux && runtime.GOARCH == "arm64" {
 					targetContent = localContent
+				} else {
+					return "none" // Safety: missing ARM64 binary
 				}
 			}
 		}
@@ -121,20 +132,13 @@ else:
 		}
 	}
 
-	localIsTermux := false
-	if fi, err := os.Stat("/data/data/com.termux"); err == nil && fi.IsDir() {
-		localIsTermux = true
-	}
-
 	if remoteExists && targetHash != "" && remHash != "" && targetHash == remHash {
-		if remIsTermux && localIsTermux {
-			EnsureCompanionBinaries(host, port, binDir, filepath.Dir(remBin))
-		}
+		EnsureCompanionBinaries(host, port, binDir, filepath.Dir(remBin))
 		return "identical"
 	}
 
 	// Push local to remote
-	if !remoteExists || locMTime >= remMTime || (isELF && localIsTermux != remIsTermux) {
+	if !remoteExists || locMTime >= remMTime {
 		remParent := filepath.Dir(remBin)
 		tmpRem := fmt.Sprintf("%s.tmp_%d_%s", remBin, time.Now().Unix(), randomToken(3))
 		remTargetMTime := locMTime + int64(clockSkew)
@@ -159,16 +163,31 @@ else:
 		proc := exec.Command("ssh", sshArgs...)
 		proc.Stdin = bytes.NewReader(targetContent)
 		if err := proc.Run(); err == nil {
-			if remIsTermux && localIsTermux {
-				EnsureCompanionBinaries(host, port, binDir, remParent)
-			}
+			EnsureCompanionBinaries(host, port, binDir, remParent)
 			return "pushed"
 		}
 		return "failed"
 	} else {
 		// Remote is newer: check architecture compatibility
 		if isELF && localIsTermux != remIsTermux {
-			return "none"
+			targetName := "agy-sync-linux-arm64"
+			if localIsTermux {
+				targetName = "agy-sync-android-arm64"
+			} else if runtime.GOARCH == "amd64" {
+				targetName = "agy-sync-linux-amd64"
+			}
+			remTargetBin := filepath.Join(filepath.Dir(remBin), targetName)
+
+			stdout, _, _, err := ssh.RunSSHCmd(host, port, fmt.Sprintf("cat '%s' 2>/dev/null", remTargetBin), false)
+			if err != nil || len(stdout) < 4 || !bytes.Equal([]byte(stdout[:4]), []byte{0x7f, 'E', 'L', 'F'}) {
+				return "none"
+			}
+			tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.AgySyncScript, time.Now().Unix(), randomToken(3))
+			if err := os.WriteFile(tmpLocal, []byte(stdout), 0755); err == nil {
+				_ = os.Rename(tmpLocal, config.AgySyncScript)
+				return "pulled"
+			}
+			return "failed"
 		}
 
 		stdout, _, _, err := ssh.RunSSHCmd(host, port, fmt.Sprintf("cat '%s'", remBin), false)
@@ -200,26 +219,54 @@ else:
 }
 
 func EnsureCompanionBinaries(host string, port int, localBinDir, remBinDir string) {
-	for _, cName := range []string{"agy-sync-android-arm64", "agy-sync-linux-arm64", "agy-sync-linux-amd64"} {
-		locPath := filepath.Join(localBinDir, cName)
-		locData, err := os.ReadFile(locPath)
+	names := []string{"agy-sync-android-arm64", "agy-sync-linux-arm64", "agy-sync-linux-amd64"}
+	type compInfo struct {
+		name    string
+		data    []byte
+		locHash string
+		remPath string
+	}
+	var toCheck []compInfo
+	var checkPaths []string
+	for _, name := range names {
+		locPath := filepath.Join(localBinDir, name)
+		data, err := os.ReadFile(locPath)
 		if err != nil {
 			continue
 		}
-		locH := sha256.Sum256(locData)
-		locHash := hex.EncodeToString(locH[:])
-		remPath := filepath.Join(remBinDir, cName)
+		h := sha256.Sum256(data)
+		remPath := filepath.Join(remBinDir, name)
+		toCheck = append(toCheck, compInfo{
+			name:    name,
+			data:    data,
+			locHash: hex.EncodeToString(h[:]),
+			remPath: remPath,
+		})
+		checkPaths = append(checkPaths, fmt.Sprintf("'%s'", remPath))
+	}
+	if len(toCheck) == 0 {
+		return
+	}
 
-		checkCmd := fmt.Sprintf("sha256sum '%s' 2>/dev/null || echo NONE", remPath)
-		remOut, _, _, _ := ssh.RunSSHCmd(host, port, checkCmd, false)
-		if strings.HasPrefix(strings.TrimSpace(remOut), locHash) {
+	checkCmd := fmt.Sprintf("sha256sum %s 2>/dev/null || true", strings.Join(checkPaths, " "))
+	remOut, _, _, _ := ssh.RunSSHCmd(host, port, checkCmd, false)
+	remHashes := make(map[string]string)
+	for _, line := range strings.Split(remOut, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 {
+			remHashes[filepath.Base(fields[1])] = fields[0]
+		}
+	}
+
+	for _, item := range toCheck {
+		if remHashes[item.name] == item.locHash {
 			continue // Already up to date
 		}
 
-		pushCmd := fmt.Sprintf("cat > '%s' && chmod 755 '%s'", remPath, remPath)
+		pushCmd := fmt.Sprintf("cat > '%s' && chmod 755 '%s'", item.remPath, item.remPath)
 		args := ssh.GetSSHCmd(host, port, pushCmd, true)
 		p := exec.Command("ssh", args...)
-		p.Stdin = bytes.NewReader(locData)
+		p.Stdin = bytes.NewReader(item.data)
 		_ = p.Run()
 	}
 }
