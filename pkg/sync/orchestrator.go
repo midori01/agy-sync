@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -679,4 +680,134 @@ Arguments:
 	wg.Wait()
 	elapsed := time.Since(t0).Seconds()
 	spinner.Stop(fmt.Sprintf("\033[32m✓\033[0m Pushed settings.json to %d/%d peers \033[90m(%.2fs)\033[0m", successCount, len(peersToPush), elapsed))
+}
+
+func PushPoolToPeers(targetAlias string) {
+	if targetAlias == "-h" || targetAlias == "--help" {
+		fmt.Println(`
+Usage: agy-sync push-pool [alias]
+
+Aliases:
+  agy-sync push-accounts [alias]
+  agy-sync pool-push [alias]
+
+Arguments:
+  alias                 Optional specific peer alias (e.g. sjc1, galaxy).
+                        If omitted, force-pushes local agy-pool accounts.json to all remote peers in cluster.`)
+		return
+	}
+
+	if _, err := os.Stat(config.PoolAccountsFile); err != nil {
+		fmt.Println("[❌] No local agy-pool-accounts.json found to push.")
+		return
+	}
+
+	now := time.Now()
+	_ = os.Chtimes(config.PoolAccountsFile, now, now)
+	_ = os.Chmod(config.PoolAccountsFile, 0600)
+
+	accountCount := 0
+	if data, err := os.ReadFile(config.PoolAccountsFile); err == nil {
+		var parsed map[string]interface{}
+		if err := json.Unmarshal(data, &parsed); err == nil {
+			if accs, ok := parsed["accounts"].([]interface{}); ok {
+				accountCount = len(accs)
+			}
+		}
+	}
+
+	devices := cluster.LoadDevices()
+	localEp := config.GetLocalEndpoint()
+	localName := config.GetLocalDeviceName()
+
+	type pushPeer struct {
+		Alias string
+		Host  string
+		Port  int
+	}
+	var peersToPush []pushPeer
+
+	if targetAlias != "" {
+		ep, matchedAlias := ssh.FindEndpoint(targetAlias)
+		if ep != "" {
+			if config.IsLocalEndpoint(ep, nil) {
+				fmt.Printf("[⚠️] Target '%s' is this local device.\n", targetAlias)
+				return
+			}
+			_, _, p, tSSH := config.ParseEndpoint(ep, 8022)
+			peersToPush = append(peersToPush, pushPeer{Alias: matchedAlias, Host: tSSH, Port: p})
+		} else if dev, ok := devices[targetAlias]; ok {
+			peersToPush = append(peersToPush, pushPeer{Alias: targetAlias, Host: dev.TargetSSH, Port: dev.Port})
+		} else {
+			fmt.Printf("[❌] Peer '%s' not found in cluster.\n", targetAlias)
+			return
+		}
+	} else {
+		for alias, dev := range devices {
+			if !config.IsLocalTarget(dev.TargetSSH, dev.Port, localEp, localName) {
+				peersToPush = append(peersToPush, pushPeer{Alias: alias, Host: dev.TargetSSH, Port: dev.Port})
+			}
+		}
+	}
+
+	if len(peersToPush) == 0 {
+		fmt.Println("[⚠️] No remote peers to push account pool to.")
+		return
+	}
+
+	fmt.Printf("[🏊] Force-pushing local account pool (%d accounts) to %d peer(s)...\n", accountCount, len(peersToPush))
+	spinner := terminal.NewSpinner(fmt.Sprintf("Pushing agy-pool accounts (%d accounts) across %d peer(s)", accountCount, len(peersToPush)), true)
+	spinner.Start()
+
+	t0 := time.Now()
+	localContent, _ := os.ReadFile(config.PoolAccountsFile)
+	localMTime := now.Unix()
+	successCount := 0
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, p := range peersToPush {
+		wg.Add(1)
+		go func(peer pushPeer) {
+			defer wg.Done()
+			effH, effP, _, _ := network.ResolveFastestEndpoint(peer.Host, peer.Port, peer.Alias)
+			cmdStr := fmt.Sprintf("%s echo \"HOME:$HOME\" && (date +%%s.%%N 2>/dev/null || date +%%s)", config.PathPrefix)
+			stdout, _, _, err := ssh.RunSSHCmd(effH, effP, cmdStr, false)
+			if err != nil {
+				return
+			}
+			remHome := config.HomeDir
+			skew := 0.0
+			for _, line := range strings.Split(stdout, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "HOME:") {
+					remHome = strings.TrimSpace(strings.TrimPrefix(line, "HOME:"))
+				} else {
+					if f, err := strconv.ParseFloat(line, 64); err == nil {
+						skew = f - float64(time.Now().UnixNano())/1e9
+					}
+				}
+			}
+			remPool := config.ToRemotePath(config.PoolAccountsFile, remHome)
+			remTargetMTime := localMTime + int64(skew)
+			remParent := filepath.Dir(remPool)
+			tmpRemote := fmt.Sprintf("%s.tmp_push_pool_%d_%s", remPool, time.Now().Unix(), randomToken(3))
+
+			pushCmd := fmt.Sprintf("mkdir -p '%s' && (cat > '%s' && chmod 600 '%s' && touch -d @%d '%s' && mv -f '%s' '%s' && touch -d @%d '%s' || (rm -f '%s' 2>/dev/null; false))",
+				remParent, tmpRemote, tmpRemote, remTargetMTime, tmpRemote, tmpRemote, remPool, remTargetMTime, remPool, tmpRemote)
+
+			sshArgs := ssh.GetSSHCmd(effH, effP, pushCmd, true)
+			proc := exec.Command("ssh", sshArgs...)
+			proc.Stdin = strings.NewReader(string(localContent))
+			if err := proc.Run(); err == nil {
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+			}
+		}(p)
+	}
+
+	wg.Wait()
+	elapsed := time.Since(t0).Seconds()
+	spinner.Stop(fmt.Sprintf("\033[32m✓\033[0m Force-pushed account pool (%d accounts) to %d/%d peers \033[90m(%.2fs)\033[0m", accountCount, successCount, len(peersToPush), elapsed))
 }

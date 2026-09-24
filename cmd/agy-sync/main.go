@@ -27,6 +27,7 @@ Basic Usage:
   agy-sync probe-lan <alias> [ip]           Probe if peer is directly reachable over LAN
   agy-sync is-peer <target>                 Check if host/alias is an enrolled cluster peer
   agy-sync push-settings [alias]            Force-push local settings.json to cluster (or peer)
+  agy-sync push-pool [alias]                Force-push local agy-pool accounts.json to cluster (or peer)
   agy-sync <host>[:port] [--save]           Sync with ad-hoc IP/host (optionally save)
   agy-sync items                            Display tracked assets manifest
   agy-sync devices                          List enrolled devices, ping, status & hardware
@@ -138,6 +139,13 @@ func main() {
 			target = args[1]
 		}
 		sync.PushSettingsToPeers(target)
+		return
+	case "push-pool", "push-accounts", "pool-push":
+		target := ""
+		if len(args) >= 2 {
+			target = args[1]
+		}
+		sync.PushPoolToPeers(target)
 		return
 	case "all", "--all":
 		verbose := false
