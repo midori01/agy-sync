@@ -9,10 +9,10 @@ var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 var wideEmojis = map[rune]bool{
 	'⚡': true, '⭐': true, '🟢': true, '🔴': true, '💬': true, '📦': true,
-	'🏷': true, '📜': true, '🧠': true, '🎟': true, '🗂': true, '👥': true,
-	'📝': true, '🛠': true, '⚙': true, '📊': true, '✨': true, '🎉': true,
-	'ℹ': true, '🚀': true, '🔑': true, '🛡': true, '🪪': true, '🏊': true,
-	'🐹': true,
+	'📜': true, '🧠': true, '👥': true, '📝': true, '📊': true, '✨': true,
+	'🎉': true, 'ℹ': true, '🚀': true, '🔑': true, '🪪': true, '🏊': true,
+	'🐹': true, '🔒': true, '🔧': true, '🎫': true, '📑': true, '🔖': true,
+	'🧰': true,
 }
 
 // SanitizeText replaces tabs and newlines with spaces and strips control chars.
@@ -58,6 +58,13 @@ func PadTo(s string, targetWidth int, align ...string) string {
 	currentW := StrWidth(s)
 	pad := targetWidth - currentW
 	if pad <= 0 {
+		if currentW > targetWidth {
+			runes := []rune(s)
+			for len(runes) > 0 && StrWidth(string(runes)) > targetWidth {
+				runes = runes[:len(runes)-1]
+			}
+			return string(runes)
+		}
 		return s
 	}
 

@@ -126,7 +126,13 @@ func main() {
 		display.ShowDevices(verbose)
 		return
 	case "items", "manifest", "list", "list-items":
-		display.ShowItems()
+		verbose := false
+		for _, a := range args[1:] {
+			if a == "-v" || a == "-V" || a == "--verbose" {
+				verbose = true
+			}
+		}
+		display.ShowItems(verbose)
 		return
 	case "ssh", "connect":
 		ssh.HandleSSHCommand(args[1:])

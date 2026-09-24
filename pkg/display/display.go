@@ -271,8 +271,11 @@ func ShowDevices(verbose bool) {
 					registryChanged = true
 				}
 			}
+			if localIdType == "" {
+				localIdType = "Host"
+			}
 			routeDesc = fmt.Sprintf("Local Loopback (127.0.0.1:%d)", port)
-			idDesc = fmt.Sprintf("%s: %s", localIdType, hwVal)
+			idDesc = fmt.Sprintf("%-10s%s", localIdType+":", localIdVal)
 		} else {
 			if isDefault {
 				role = "Default"
@@ -284,8 +287,12 @@ func ShowDevices(verbose bool) {
 
 			pEntry, ok := probeResults[ep]
 			if !ok {
+				idType := strings.TrimSpace(data.IdType)
+				if idType == "" {
+					idType = "Host"
+				}
 				pEntry = probeEntry{
-					Probe: DeviceProbeRes{Online: false, Hardware: "offline"},
+					Probe: DeviceProbeRes{Online: false, Hardware: "offline", IdType: idType},
 					Route: DeviceRouteInfo{EffHost: host, EffPort: port, RouteTier: "Tailnet Mesh"},
 				}
 			}
@@ -359,8 +366,22 @@ func ShowDevices(verbose bool) {
 				}
 			}
 
+			rawHw := pEntry.Probe.Hardware
+			if rawHw == "" || rawHw == "offline" {
+				rawHw = data.NativeName
+				if rawHw == "" {
+					rawHw = "unknown"
+				}
+			}
+			idType := pEntry.Probe.IdType
+			if idType == "" {
+				idType = data.IdType
+				if idType == "" {
+					idType = "Host"
+				}
+			}
 			routeDesc = fmt.Sprintf("%s (%s:%d)", pEntry.Route.RouteTier, pEntry.Route.EffHost, pEntry.Route.EffPort)
-			idDesc = fmt.Sprintf("%s: %s", pEntry.Probe.IdType, hwVal)
+			idDesc = fmt.Sprintf("%-10s%s", idType+":", rawHw)
 		}
 
 		tableRows = append(tableRows, []string{nodeDisp, role, routeDisp, pingStr, hwVal, statusStr})
@@ -447,7 +468,12 @@ func ShowDevices(verbose bool) {
 	}
 }
 
-func ShowItems() {
+func ShowItems(verbose ...bool) {
+	isVerbose := false
+	if len(verbose) > 0 && verbose[0] {
+		isVerbose = true
+	}
+
 	type manifestItem struct {
 		Name   string
 		Path   string
@@ -460,13 +486,13 @@ func ShowItems() {
 		{"⚡ Synchronizer Engine", config.AgySyncScript, "SHA-256 + NTP Skew"},
 		{"🌐 Device Registry", config.DevicesJSONFile, "LWW + NTP Skew"},
 		{"🔑 SSH Authorized Keys", config.AuthKeysFile, "Set Union"},
-		{"🛡️ SSH Client Config", config.SSHConfigFile, "Block Auto-Sync"},
-		{"⚙️ CLI Settings", config.SettingsFile, "SHA-256 + NTP Skew"},
+		{"🔒 SSH Client Config", config.SSHConfigFile, "Block Auto-Sync"},
+		{"🔧 CLI Settings", config.SettingsFile, "SHA-256 + NTP Skew"},
 		{"📊 Jetbox Summaries", config.ProtoSummariesFile, "Stream + SHA-256"},
 	}
 
 	if fi, err := os.Stat(config.OAuthTokenFile); err == nil && !fi.IsDir() {
-		items = append(items, manifestItem{"🎟️ Antigravity Token", config.OAuthTokenFile, "SHA-256 + 0600"})
+		items = append(items, manifestItem{"🎫 Antigravity Token", config.OAuthTokenFile, "SHA-256 + 0600"})
 	}
 
 	if fi, err := os.Stat(config.PoolAccountsFile); err == nil && !fi.IsDir() {
@@ -480,12 +506,12 @@ func ShowItems() {
 	}
 
 	items = append(items, []manifestItem{
-		{"🗂️ Conversation Index", config.SummariesDBFile, "SQLite Union"},
+		{"📑 Conversation Index", config.SummariesDBFile, "SQLite Union"},
 		{"💬 Conversation DBs", config.ConvDir, "WAL Snapshot"},
-		{"🏷️ Session Annotations", config.AnnDir, "Diff Stream"},
+		{"🔖 Session Annotations", config.AnnDir, "Diff Stream"},
 		{"📦 Brain Transcripts", config.BrainDir, "Compressed Tar"},
 		{"📝 Prompt History", config.HistoryFile, "Chrono Union"},
-		{"🛠️ Custom Skills/Configs", config.ConfigDir, "Full-Duplex Tar"},
+		{"🧰 Custom Skills/Configs", config.ConfigDir, "Full-Duplex Tar"},
 	}...)
 
 	colWidths := []int{24, 27, 13}
@@ -548,4 +574,53 @@ func ShowItems() {
 	lines = append(lines, fmt.Sprintf("└%s┘", strings.Repeat("─", totW-2)))
 
 	fmt.Printf("\n%s\n\n", strings.Join(lines, "\n"))
+
+	if isVerbose && len(items) > 0 {
+		fmt.Println("[Synchronized Asset Details]")
+		for _, item := range items {
+			cTitle := item.Name
+			cBarLen := totW - 5 - terminal.StrWidth("["+cTitle+"]")
+			if cBarLen < 2 {
+				cBarLen = 2
+			}
+			cTop := fmt.Sprintf("┌─ [%s] %s┐", cTitle, strings.Repeat("─", cBarLen))
+			var cLines []string
+			cLines = append(cLines, cTop)
+
+			dispPath := item.Path
+			if strings.HasPrefix(dispPath, config.HomeDir) {
+				dispPath = "~" + strings.TrimPrefix(dispPath, config.HomeDir)
+			}
+			dispPath = terminal.CompactPath(dispPath, innerW-10)
+
+			cLines = append(cLines, fmt.Sprintf("│ %s │", terminal.PadTo(fmt.Sprintf("%-10s%s", "Target:", dispPath), innerW)))
+			cLines = append(cLines, fmt.Sprintf("│ %s │", terminal.PadTo(fmt.Sprintf("%-10s%s", "Engine:", item.Engine), innerW)))
+
+			fi, err := os.Stat(item.Path)
+			if err != nil {
+				cLines = append(cLines, fmt.Sprintf("│ %s │", terminal.PadTo(fmt.Sprintf("%-10s🔴 Missing (not created)", "Status:"), innerW)))
+			} else {
+				if fi.IsDir() {
+					entries, err := os.ReadDir(item.Path)
+					count := 0
+					if err == nil {
+						count = len(entries)
+					}
+					cLines = append(cLines, fmt.Sprintf("│ %s │", terminal.PadTo(fmt.Sprintf("%-10s🟢 Directory (%d entries, mode %04o)", "Status:", count, fi.Mode().Perm()), innerW)))
+				} else {
+					sz := fi.Size()
+					szStr := fmt.Sprintf("%.1f KB", float64(sz)/1024.0)
+					if sz >= 1024*1024 {
+						szStr = fmt.Sprintf("%.1f MB", float64(sz)/(1024.0*1024.0))
+					}
+					cLines = append(cLines, fmt.Sprintf("│ %s │", terminal.PadTo(fmt.Sprintf("%-10s🟢 File (%s, mode %04o)", "Status:", szStr, fi.Mode().Perm()), innerW)))
+				}
+				mTimeStr := fi.ModTime().Format("2006-01-02 15:04:05 MST")
+				cLines = append(cLines, fmt.Sprintf("│ %s │", terminal.PadTo(fmt.Sprintf("%-10s%s", "Updated:", mTimeStr), innerW)))
+			}
+
+			cLines = append(cLines, fmt.Sprintf("└%s┘", strings.Repeat("─", totW-2)))
+			fmt.Println(strings.Join(cLines, "\n"))
+		}
+	}
 }

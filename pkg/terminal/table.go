@@ -45,7 +45,17 @@ func CompactPath(pStr string, maxW ...int) string {
 	}
 	excess := StrWidth(pStr) - limit + 3
 	if excess > 0 && len(pStr) > 12+excess {
-		return pStr[:12] + "..." + pStr[12+excess:]
+		cand := pStr[:12] + "..." + pStr[12+excess:]
+		if StrWidth(cand) <= limit {
+			return cand
+		}
+	}
+	if StrWidth(pStr) > limit {
+		runes := []rune(pStr)
+		for len(runes) > 0 && StrWidth(string(runes)+"...") > limit {
+			runes = runes[:len(runes)-1]
+		}
+		return string(runes) + "..."
 	}
 	return pStr
 }
