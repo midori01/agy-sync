@@ -79,7 +79,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 1. Pipeline Handshake
 	stepStatus("Pipeline handshake")
-	handshakeCmd := `echo READY && echo "HOME:$HOME" && echo "USER:$(whoami 2>/dev/null || echo "$USER")" && echo "ARCH:$(uname -m 2>/dev/null || echo unknown)" && echo "COMMIT:$(command -v agy-sync >/dev/null 2>&1 && agy-sync --commit 2>/dev/null || echo NONE)" && echo "TS_IP:$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null || true)" && echo "LAN_IPS:$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis)/ {print $4}' | cut -d/ -f1) | tr '\n' ',')" && (date +%s.%N 2>/dev/null || date +%s)`
+	handshakeCmd := `echo READY && echo "HOME:$HOME" && echo "USER:$(whoami 2>/dev/null || echo "$USER")" && echo "ARCH:$(uname -m 2>/dev/null || echo unknown)" && echo "COMMIT:$(command -v agy-sync >/dev/null 2>&1 && agy-sync --commit 2>/dev/null || echo NONE)" && echo "TS_IP:$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null || true)" && echo "LAN_IPS:$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/ {print $4}' | cut -d/ -f1) | tr '\n' ',')" && (date +%s.%N 2>/dev/null || date +%s)`
 
 	connectTo := 8
 	if host != origHost {
@@ -172,10 +172,12 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 			remTsIP = strings.TrimSpace(strings.TrimPrefix(line, "TS_IP:"))
 		} else if strings.HasPrefix(line, "LAN_IPS:") {
 			raw := strings.TrimSpace(strings.TrimPrefix(line, "LAN_IPS:"))
+			seen := make(map[string]bool)
 			for _, token := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }) {
 				token = strings.TrimSpace(token)
-				if token != "" && token != "127.0.0.1" && token != "localhost" && token != "0.0.0.0" && token != "::1" {
-					if regexp.MustCompile(`^\d+\.\d+\.\d+\.\d+$`).MatchString(token) {
+				if token != "" && token != "127.0.0.1" && token != "localhost" && token != "0.0.0.0" && token != "::1" && !strings.HasPrefix(token, "100.") {
+					if regexp.MustCompile(`^\d+\.\d+\.\d+\.\d+$`).MatchString(token) && !seen[token] {
+						seen[token] = true
 						remLanIPs = append(remLanIPs, token)
 					}
 				}

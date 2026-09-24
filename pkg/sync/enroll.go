@@ -446,7 +446,7 @@ fi
 		preferredEP = fmt.Sprintf("%s@%s:%d", remoteUser, preferredIP, port)
 	}
 
-	lanProbeCmd := `(ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|wg)/ {print $4}' | cut -d/ -f1) | tr '\n' ','`
+	lanProbeCmd := `(ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/ {print $4}' | cut -d/ -f1) | tr '\n' ','`
 	lanRes, _, _, _ := ssh.RunSSHCmd(sshTarget, port, lanProbeCmd, false)
 	var lanIPs []string
 	lanSet := make(map[string]bool)

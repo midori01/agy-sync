@@ -136,8 +136,11 @@ func ReconcileSSHConfig(reg ...config.Registry) {
 		}
 
 		var entryBlocks []string
+		seenLan := make(map[string]bool)
 		for _, lanIP := range data.LanIps {
-			if lanIP != "" && lanIP != "127.0.0.1" && lanIP != "localhost" && lanIP != "0.0.0.0" {
+			lanIP = strings.TrimSpace(lanIP)
+			if lanIP != "" && lanIP != "127.0.0.1" && lanIP != "localhost" && lanIP != "0.0.0.0" && !seenLan[lanIP] {
+				seenLan[lanIP] = true
 				matchLines := []string{
 					fmt.Sprintf("Match host %s exec \"agy-sync probe-lan %%h %s %d 2>/dev/null || $HOME/.gemini/antigravity-cli/bin/agy-sync probe-lan %%h %s %d 2>/dev/null\"", strings.Join(hostAliases, ","), lanIP, port, lanIP, port),
 					fmt.Sprintf("  HostName %s", lanIP),
