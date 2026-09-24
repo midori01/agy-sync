@@ -203,32 +203,98 @@ fi
 	}
 
 	tsIP := ""
-	if setupTailscale && tsKey != "" {
-		if _, ok := cfg["cluster"]; !ok {
-			cfg["cluster"] = make(map[string]string)
+	if setupTailscale {
+		if tsKey != "" {
+			if _, ok := cfg["cluster"]; !ok {
+				cfg["cluster"] = make(map[string]string)
+			}
+			cfg["cluster"]["tailscale_auth_key"] = tsKey
+			config.SaveConfig(cfg)
 		}
-		cfg["cluster"]["tailscale_auth_key"] = tsKey
-		config.SaveConfig(cfg)
 
 		fmt.Println("[🌐] Checking Tailscale status on remote host...")
-		_, _, code, _ := ssh.RunSSHCmd(sshTarget, port, "command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1", false)
+		_, _, code, _ := ssh.RunSSHCmd(sshTarget, port, "command -v tailscale >/dev/null 2>&1", false)
 		if code != 0 {
-			fmt.Println("[🌐] Installing and connecting Tailscale...")
-			tsJoinScript := fmt.Sprintf(`
+			fmt.Println("[🌐] Installing Tailscale via official installer...")
+			tsInstallScript := `
 SUDO=""
 if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
     SUDO="sudo -n"
 fi
-if ! command -v tailscale >/dev/null 2>&1; then
-    curl -fsSL https://tailscale.com/install.sh | $SUDO sh >/dev/null 2>&1
-fi
-$SUDO tailscale up --authkey='%s' --hostname='%s' --accept-routes >/dev/null 2>&1
-`, tsKey, remoteHostname)
-			_, _, _, _ = ssh.RunSSHCmd(sshTarget, port, tsJoinScript, false)
+curl -fsSL https://tailscale.com/install.sh | $SUDO sh >/dev/null 2>&1
+`
+			_, _, _, _ = ssh.RunSSHCmd(sshTarget, port, tsInstallScript, false)
 		}
 
 		ipRes, _, _, _ := ssh.RunSSHCmd(sshTarget, port, "tailscale ip -4 2>/dev/null", false)
 		tsIP = strings.TrimSpace(ipRes)
+
+		if tsIP == "" {
+			if tsKey != "" {
+				fmt.Println("[🌐] Connecting to Tailscale mesh using auth key...")
+				tsJoinScript := fmt.Sprintf(`
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo -n"
+fi
+$SUDO tailscale up --authkey='%s' --hostname='%s' --accept-routes >/dev/null 2>&1
+`, tsKey, remoteHostname)
+				_, _, _, _ = ssh.RunSSHCmd(sshTarget, port, tsJoinScript, false)
+				ipRes, _, _, _ = ssh.RunSSHCmd(sshTarget, port, "tailscale ip -4 2>/dev/null", false)
+				tsIP = strings.TrimSpace(ipRes)
+			} else {
+				fmt.Println("[🌐] Initiating Tailscale mesh connection...")
+				tsStartScript := fmt.Sprintf(`
+SUDO=""
+if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo -n"
+fi
+$SUDO tailscale up --hostname='%s' --accept-routes --reset >/tmp/tailscale-up.log 2>&1 &
+`, remoteHostname)
+				_, _, _, _ = ssh.RunSSHCmd(sshTarget, port, tsStartScript, false)
+
+				loginURL := ""
+				for attempt := 0; attempt < 8; attempt++ {
+					time.Sleep(1 * time.Second)
+					stOut, _, _, _ := ssh.RunSSHCmd(sshTarget, port, "tailscale status 2>/dev/null || cat /tmp/tailscale-up.log 2>/dev/null", false)
+					for _, line := range strings.Split(stOut, "\n") {
+						line = strings.TrimSpace(line)
+						if strings.Contains(line, "login.tailscale.com/a/") {
+							idx := strings.Index(line, "https://login.tailscale.com/a/")
+							if idx >= 0 {
+								loginURL = line[idx:]
+								break
+							}
+						}
+					}
+					if loginURL != "" {
+						break
+					}
+					ipCheck, _, _, _ := ssh.RunSSHCmd(sshTarget, port, "tailscale ip -4 2>/dev/null", false)
+					if strings.TrimSpace(ipCheck) != "" {
+						tsIP = strings.TrimSpace(ipCheck)
+						break
+					}
+				}
+
+				if tsIP == "" && loginURL != "" {
+					fmt.Printf("\n[🌐] ═══ Tailscale Authorization Required ═══\n")
+					fmt.Printf("👉 Please open this URL in your browser to approve '%s':\n", remoteHostname)
+					fmt.Printf("   \033[1;36m%s\033[0m\n\n", loginURL)
+					fmt.Println("[⏳] Awaiting Tailscale authentication (waiting up to 120s)...")
+
+					for wait := 0; wait < 40; wait++ {
+						time.Sleep(3 * time.Second)
+						ipCheck, _, _, _ := ssh.RunSSHCmd(sshTarget, port, "tailscale ip -4 2>/dev/null", false)
+						if strings.TrimSpace(ipCheck) != "" {
+							tsIP = strings.TrimSpace(ipCheck)
+							break
+						}
+					}
+				}
+			}
+		}
+
 		if tsIP != "" {
 			fmt.Printf("[✅] Tailscale mesh connected: %s\n", tsIP)
 			fwScript := `
@@ -242,6 +308,8 @@ if command -v systemctl >/dev/null 2>&1; then
 fi
 `
 			_, _, _, _ = ssh.RunSSHCmd(sshTarget, port, fwScript, false)
+		} else {
+			fmt.Println("[⚠️] Tailscale not connected; falling back to direct connection.")
 		}
 	}
 
@@ -380,13 +448,19 @@ fi
 		preferredEP = fmt.Sprintf("%s@%s:%d", remoteUser, preferredIP, port)
 	}
 
-	lanProbeCmd := `(ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br)/ {print $4}' | cut -d/ -f1) | tr '\n' ','`
+	lanProbeCmd := `(ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|wg)/ {print $4}' | cut -d/ -f1) | tr '\n' ','`
 	lanRes, _, _, _ := ssh.RunSSHCmd(sshTarget, port, lanProbeCmd, false)
 	var lanIPs []string
+	lanSet := make(map[string]bool)
 	for _, ip := range strings.Split(lanRes, ",") {
-		if ip = strings.TrimSpace(ip); ip != "" && !strings.HasPrefix(ip, "127.") {
+		if ip = strings.TrimSpace(ip); ip != "" && !strings.HasPrefix(ip, "127.") && !strings.HasPrefix(ip, "100.") && !lanSet[ip] {
 			lanIPs = append(lanIPs, ip)
+			lanSet[ip] = true
 		}
+	}
+	if host != preferredIP && !lanSet[host] && !strings.HasPrefix(host, "127.") && !strings.HasPrefix(host, "100.") {
+		lanIPs = append(lanIPs, host)
+		lanSet[host] = true
 	}
 
 	targetAlias := strings.ToLower(strings.TrimSpace(aliasOverride))
