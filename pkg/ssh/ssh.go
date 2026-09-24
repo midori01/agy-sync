@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -104,24 +105,30 @@ func ShellEscape(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// CleanupStaleControlSockets checks all master sockets in SocketDir and removes dead ones.
+// CleanupStaleControlSockets checks all master sockets in SocketDir concurrently and removes dead ones.
 func CleanupStaleControlSockets() {
 	entries, err := os.ReadDir(config.SocketDir)
 	if err != nil {
 		return
 	}
+	var wg sync.WaitGroup
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "cm-") {
-			sockPath := filepath.Join(config.SocketDir, e.Name())
-			conn, err := net.DialTimeout("unix", sockPath, 100*time.Millisecond)
-			if err != nil {
-				// Socket is not responding or connection refused: remove stale file
-				_ = os.Remove(sockPath)
-			} else {
-				_ = conn.Close()
-			}
+			wg.Add(1)
+			go func(sockName string) {
+				defer wg.Done()
+				sockPath := filepath.Join(config.SocketDir, sockName)
+				conn, err := net.DialTimeout("unix", sockPath, 35*time.Millisecond)
+				if err != nil {
+					// Socket is not responding or connection refused: remove stale file
+					_ = os.Remove(sockPath)
+				} else {
+					_ = conn.Close()
+				}
+			}(e.Name())
 		}
 	}
+	wg.Wait()
 }
 
 func ReconcileSSHConfig(reg ...config.Registry) {
@@ -135,7 +142,14 @@ func ReconcileSSHConfig(reg ...config.Registry) {
 	var entries []string
 	assignedSSHHosts := make(map[string]bool)
 
-	for ep, data := range registry {
+	var regEps []string
+	for ep := range registry {
+		regEps = append(regEps, ep)
+	}
+	sort.Strings(regEps)
+
+	for _, ep := range regEps {
+		data := registry[ep]
 		if data.Deleted {
 			continue
 		}
@@ -318,10 +332,7 @@ func ReconcileSSHConfig(reg ...config.Registry) {
 	}
 
 	if newContent != existingContent {
-		tmpFile := config.SSHConfigFile + ".tmp"
-		if err := os.WriteFile(tmpFile, []byte(newContent), 0600); err == nil {
-			_ = os.Rename(tmpFile, config.SSHConfigFile)
-		}
+		_ = config.WriteFileAtomic(config.SSHConfigFile, []byte(newContent), 0600)
 	}
 }
 
@@ -379,11 +390,7 @@ func ReconcileShellIntegration(reg ...config.Registry) {
 	sort.Strings(peerList)
 	peersLine := strings.Join(peerList, " ")
 
-	_ = os.MkdirAll(filepath.Dir(config.PeersListFile), 0755)
-	tmpPeers := config.PeersListFile + ".tmp"
-	if err := os.WriteFile(tmpPeers, []byte(peersLine+"\n"), 0644); err == nil {
-		_ = os.Rename(tmpPeers, config.PeersListFile)
-	}
+	_ = config.WriteFileAtomic(config.PeersListFile, []byte(peersLine+"\n"), 0644)
 
 	shellBlock := fmt.Sprintf(`%s
 ssh() {
@@ -474,14 +481,11 @@ ssh() {
 		}
 
 		if newContent != existing {
-			tmpRc := rcFile + ".tmp"
 			mode := os.FileMode(0644)
 			if fi, err := os.Stat(rcFile); err == nil {
 				mode = fi.Mode()
 			}
-			if err := os.WriteFile(tmpRc, []byte(newContent), mode); err == nil {
-				_ = os.Rename(tmpRc, rcFile)
-			}
+			_ = config.WriteFileAtomic(rcFile, []byte(newContent), mode)
 		}
 	}
 }

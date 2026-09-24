@@ -149,6 +149,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 			tmpLocal := fmt.Sprintf("%s.tmp_%d_%s", config.AgySyncScript, time.Now().UnixNano(), randomToken(3))
 			if err := os.WriteFile(tmpLocal, binData, 0755); err == nil {
 				_ = os.Rename(tmpLocal, config.AgySyncScript)
+				_ = os.Chmod(config.AgySyncScript, 0755)
 				config.GitCommit = remCommit
 				return "pulled binary from peer"
 			}
@@ -203,20 +204,21 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 	tmpRem := fmt.Sprintf("%s.tmp_%d_%s", remBin, time.Now().UnixNano(), randomToken(3))
 	remTargetMTime := fi.ModTime().Unix() + int64(clockSkew)
 
-	pushCmd := fmt.Sprintf(`mkdir -p '%s' && cat > '%s' && chmod 755 '%s' && `+
+	pushCmd := fmt.Sprintf(`mkdir -p '%s' && (cat > '%s' && chmod 755 '%s' && `+
 		`(touch -d @%d '%s' 2>/dev/null || true) && `+
 		`mv -f '%s' '%s' && `+
 		`(touch -d @%d '%s' 2>/dev/null || true) && `+
 		`mkdir -p '%s/.local/bin' 2>/dev/null && ln -sf '%s' '%s/.local/bin/agy-sync' 2>/dev/null || true; `+
 		`if [ -w /usr/local/bin ] || [ "$(id -u)" -eq 0 ]; then ln -sf '%s' /usr/local/bin/agy-sync 2>/dev/null || true; `+
 		`elif command -v sudo >/dev/null 2>&1; then sudo -n ln -sf '%s' /usr/local/bin/agy-sync 2>/dev/null || true; `+
-		`elif [ -d /data/data/com.termux/files/usr/bin ]; then ln -sf '%s' /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true; fi`,
+		`elif [ -d /data/data/com.termux/files/usr/bin ]; then ln -sf '%s' /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true; fi || (rm -f '%s' 2>/dev/null; false))`,
 		remParent, tmpRem, tmpRem,
 		remTargetMTime, tmpRem,
 		tmpRem, remBin,
 		remTargetMTime, remBin,
 		remHome, remBin, remHome,
 		remBin, remBin, remBin,
+		tmpRem,
 	)
 
 	sshArgs := ssh.GetSSHCmd(host, port, pushCmd, true)

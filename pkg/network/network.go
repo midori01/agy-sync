@@ -70,11 +70,14 @@ func GetLocalLanNetworks(forceRefresh ...bool) []LanNetwork {
 				for _, addr := range addrs {
 					if ipNet, ok := addr.(*net.IPNet); ok {
 						if ip4 := ipNet.IP.To4(); ip4 != nil && !ip4.IsLoopback() && !ip4.IsLinkLocalUnicast() {
-							networks = append(networks, LanNetwork{
-								Interface: iface.Name,
-								IP:        ip4.String(),
-								Net:       ipNet,
-							})
+							ones, bits := ipNet.Mask.Size()
+							if bits == 32 && ones >= 8 && ones <= 30 {
+								networks = append(networks, LanNetwork{
+									Interface: iface.Name,
+									IP:        ip4.String(),
+									Net:       ipNet,
+								})
+							}
 						}
 					}
 				}
@@ -139,8 +142,9 @@ func GetLocalLanNetworks(forceRefresh ...bool) []LanNetwork {
 				maskIP := net.ParseIP(maskStr).To4()
 				if maskIP != nil {
 					mask := net.IPv4Mask(maskIP[0], maskIP[1], maskIP[2], maskIP[3])
+					ones, bits := mask.Size()
 					ip := net.ParseIP(ipStr).To4()
-					if ip != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
+					if ip != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && bits == 32 && ones >= 8 && ones <= 30 {
 						ipNet := &net.IPNet{IP: ip.Mask(mask), Mask: mask}
 						networks = append(networks, LanNetwork{
 							Interface: ifname,
@@ -174,11 +178,14 @@ func GetLocalLanNetworks(forceRefresh ...bool) []LanNetwork {
 						cidr := parts[3]
 						ip, ipNet, err := net.ParseCIDR(cidr)
 						if err == nil && ip.To4() != nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() {
-							networks = append(networks, LanNetwork{
-								Interface: ifname,
-								IP:        ip.String(),
-								Net:       ipNet,
-							})
+							ones, bits := ipNet.Mask.Size()
+							if bits == 32 && ones >= 8 && ones <= 30 {
+								networks = append(networks, LanNetwork{
+									Interface: ifname,
+									IP:        ip.String(),
+									Net:       ipNet,
+								})
+							}
 						}
 					}
 				}

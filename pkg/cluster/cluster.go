@@ -94,7 +94,14 @@ func ReconcileRegistry() {
 	assignedAliases := make(map[string]bool)
 	newDevices := make(map[string]string)
 
-	for ep, data := range registry {
+	var regEps []string
+	for ep := range registry {
+		regEps = append(regEps, ep)
+	}
+	sort.Strings(regEps)
+
+	for _, ep := range regEps {
+		data := registry[ep]
 		_, host, _, _ := config.ParseEndpoint(ep, 8022)
 		if host == "127.0.0.1" || host == "localhost" || host == "0.0.0.0" || host == "::1" {
 			if !data.Deleted {
@@ -206,7 +213,13 @@ func MergeRegistries(regA, regB config.Registry, skewB float64) (config.Registry
 	bChanged := false
 	now := float64(time.Now().UnixNano()) / 1e9
 
+	var sortedEps []string
 	for ep := range allEps {
+		sortedEps = append(sortedEps, ep)
+	}
+	sort.Strings(sortedEps)
+
+	for _, ep := range sortedEps {
 		recA := regA[ep]
 		recB := regB[ep]
 		_, host, _, _ := config.ParseEndpoint(ep, 8022)

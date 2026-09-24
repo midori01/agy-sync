@@ -73,6 +73,28 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	}
 	host, port = effHost, effPort
 
+	// Launch async background ping for single-node sync if latency wasn't pre-resolved (zero-cost)
+	var bgPingChan chan float64
+	if routeLat == 0.0 {
+		bgPingChan = make(chan float64, 1)
+		probeTarget := host
+		_, ph, pp, _ := config.ParseEndpoint(host, port)
+		if ph != "" {
+			probeTarget = ph
+		}
+		probePort := port
+		if pp != 0 {
+			probePort = pp
+		}
+		go func() {
+			if ok, lat, _ := network.ProbeSSHBanner(probeTarget, probePort, 2000*time.Millisecond); ok {
+				bgPingChan <- lat
+			} else {
+				bgPingChan <- 0.0
+			}
+		}()
+	}
+
 	if verbose {
 		if host != origHost || port != origPort {
 			fmt.Printf("[⚡] Route optimized: %s -> %s:%d (%.1fms)\n", routeTier, host, port, routeLat)
@@ -115,6 +137,15 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 				if errMsg == "" {
 					errMsg = "Handshake check failed"
 				}
+				if bgPingChan != nil {
+					select {
+					case lat := <-bgPingChan:
+						if lat > 0 {
+							routeLat = lat
+						}
+					default:
+					}
+				}
 				res := &terminal.SyncResult{
 					Success:   false,
 					PeerName:  peerName,
@@ -135,6 +166,15 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 			errMsg := strings.TrimSpace(stderr)
 			if errMsg == "" {
 				errMsg = "Handshake check failed"
+			}
+			if bgPingChan != nil {
+				select {
+				case lat := <-bgPingChan:
+					if lat > 0 {
+						routeLat = lat
+					}
+				default:
+				}
 			}
 			res := &terminal.SyncResult{
 				Success:   false,
@@ -395,6 +435,16 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	if createdSpinner && activeSpinner != nil {
 		activeSpinner.Stop()
+	}
+
+	if bgPingChan != nil {
+		select {
+		case lat := <-bgPingChan:
+			if lat > 0 {
+				routeLat = lat
+			}
+		default:
+		}
 	}
 
 	result := &terminal.SyncResult{

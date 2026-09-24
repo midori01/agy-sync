@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -161,7 +162,7 @@ if remote_changed or not rem_snap:
     tmp_out.close()
     write_db(tmp_out.name, merged_rows)
     rem_dir = os.path.dirname(rem_db)
-    push_ssh = ["ssh", "-p", "%d", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ControlMaster=auto", "-o", "ControlPath=%s/cm-%%C", "-o", "ControlPersist=60s", "%s", f"mkdir -p '{rem_dir}' && cat > '{rem_db}.tmp' && mv -f '{rem_db}.tmp' '{rem_db}'"]
+    push_ssh = ["ssh", "-p", "%d", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ControlMaster=auto", "-o", "ControlPath=%s/cm-%%C", "-o", "ControlPersist=60s", "%s", f"mkdir -p '{rem_dir}' && (cat > '{rem_db}.tmp' && mv -f '{rem_db}.tmp' '{rem_db}' || (rm -f '{rem_db}.tmp' 2>/dev/null; false))"]
     with open(tmp_out.name, "rb") as f_in:
         subprocess.run(push_ssh, stdin=f_in)
     if os.path.exists(tmp_out.name):
@@ -271,6 +272,8 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 			}
 		}
 	}
+	sort.Strings(toPush)
+	sort.Strings(toPull)
 
 	pushedCount := 0
 	if len(toPush) > 0 {
@@ -405,6 +408,8 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string) (
 			toPull = append(toPull, k)
 		}
 	}
+	sort.Strings(toPush)
+	sort.Strings(toPull)
 
 	pushed := 0
 	if len(toPush) > 0 {
@@ -521,6 +526,8 @@ if os.path.isdir(b):
 			}
 		}
 	}
+	sort.Strings(toPush)
+	sort.Strings(toPull)
 
 	pushedCount := 0
 	if len(toPush) > 0 {

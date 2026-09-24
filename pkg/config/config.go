@@ -2,6 +2,8 @@ package config
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -45,7 +47,7 @@ var (
 )
 
 var (
-	Version   = "7.4"
+	Version   = "7.5"
 	GitCommit = "dev"
 )
 
@@ -216,19 +218,54 @@ func LoadRegistry() Registry {
 	return SeedRegistryFromConfig()
 }
 
+// RandomToken generates a cryptographically secure hex string of n bytes.
+func RandomToken(n int) string {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// WriteFileAtomic safely writes data to a temporary file, fsyncs it to disk for ACID crash-consistency,
+// and atomically renames it to path with the specified permission.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	tmpPath := fmt.Sprintf("%s.tmp_%d_%s", path, time.Now().UnixNano(), RandomToken(3))
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	_ = os.Chmod(tmpPath, perm)
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
+}
+
 func SaveRegistry(reg Registry) error {
-	_ = os.MkdirAll(filepath.Dir(DevicesJSONFile), 0755)
-	tmpPath := fmt.Sprintf("%s.tmp_%d", DevicesJSONFile, time.Now().UnixNano())
 	data, err := json.MarshalIndent(reg, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-	defer os.Remove(tmpPath)
-	return os.Rename(tmpPath, DevicesJSONFile)
+	return WriteFileAtomic(DevicesJSONFile, data, 0644)
 }
 
 func SeedRegistryFromConfig() Registry {
@@ -419,31 +456,34 @@ func GetLocalIPs(forceRefresh bool) map[string]bool {
 		}
 	}
 
-	// 2. ifconfig inet
-	if out, err := exec.Command("ifconfig").Output(); err == nil {
-		matches := ifconfigInetRegex.FindAllStringSubmatch(string(out), -1)
-		for _, m := range matches {
-			if len(m) > 1 {
-				ips[m[1]] = true
+	// 2. Fallback to external commands only if native interface discovery did not find non-loopback addresses
+	if len(ips) <= 4 {
+		// A. ifconfig inet
+		if out, err := exec.Command("ifconfig").Output(); err == nil {
+			matches := ifconfigInetRegex.FindAllStringSubmatch(string(out), -1)
+			for _, m := range matches {
+				if len(m) > 1 {
+					ips[m[1]] = true
+				}
 			}
 		}
-	}
 
-	// 3. hostname -I
-	if out, err := exec.Command("hostname", "-I").Output(); err == nil {
-		for _, part := range strings.Fields(string(out)) {
-			ips[strings.TrimSpace(part)] = true
+		// B. hostname -I
+		if out, err := exec.Command("hostname", "-I").Output(); err == nil {
+			for _, part := range strings.Fields(string(out)) {
+				ips[strings.TrimSpace(part)] = true
+			}
 		}
-	}
 
-	// 4. ip -o addr show
-	for _, cmdArgs := range [][]string{{"ip", "-o", "addr", "show"}, {"/system/bin/ip", "-o", "addr", "show"}} {
-		if out, err := exec.Command(cmdArgs[0], cmdArgs[1:]...).Output(); err == nil {
-			for _, line := range strings.Split(string(out), "\n") {
-				fields := strings.Fields(line)
-				if len(fields) >= 4 && strings.Contains(fields[3], "/") {
-					ip := strings.Split(fields[3], "/")[0]
-					ips[ip] = true
+		// C. ip -o addr show
+		for _, cmdArgs := range [][]string{{"ip", "-o", "addr", "show"}, {"/system/bin/ip", "-o", "addr", "show"}} {
+			if out, err := exec.Command(cmdArgs[0], cmdArgs[1:]...).Output(); err == nil {
+				for _, line := range strings.Split(string(out), "\n") {
+					fields := strings.Fields(line)
+					if len(fields) >= 4 && strings.Contains(fields[3], "/") {
+						ip := strings.Split(fields[3], "/")[0]
+						ips[ip] = true
+					}
 				}
 			}
 		}
