@@ -414,8 +414,9 @@ cat ~/.ssh/id_ed25519.pub
 		if strings.TrimSpace(stdout) != "NONE" && strings.TrimSpace(stdout) != "" {
 			fmt.Printf("[💡] Local host lacks Go cross-compiler for %s, but remote target has Go installed. Will build on target.\n", arch)
 		} else {
+			platformName, installGoCmd := GetGoInstallAdvice()
 			fmt.Printf("[⚠️] Warning: Cannot provide pre-compiled binary for remote architecture '%s' (host is %s, companion binary missing, and Go compiler not installed).\n", arch, runtime.GOARCH)
-			fmt.Println("    👉 Tip: Install 'golang' on Termux ('pkg install golang') or on the target device to enable cross-arch pairing.")
+			fmt.Printf("    👉 Tip: Install Go on this device (%s: '%s') or on the target device.\n", platformName, installGoCmd)
 		}
 	} else {
 		binSz := int64(len(targetBinaryData))
@@ -707,7 +708,12 @@ else
         echo "[🔨] Local Go compiler found on this device."
     else
         echo "[❌] Architecture '${ARCH}' binary unavailable and 'go' compiler is missing."
-        echo "    👉 To enable cross-architecture pairing: Install 'golang' on either device (e.g. 'pkg install golang' on Termux or 'apt install golang-go' on Linux)."
+        echo "    👉 To enable cross-architecture pairing: Install 'golang' on either device:"
+        echo "       • Debian / Ubuntu : sudo apt-get install -y golang-go"
+        echo "       • Arch Linux      : sudo pacman -S --noconfirm go"
+        echo "       • Fedora / RHEL   : sudo dnf install -y golang"
+        echo "       • Alpine Linux    : sudo apk add go"
+        echo "       • Android Termux  : pkg install -y golang"
     fi
 fi
 

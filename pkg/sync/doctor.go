@@ -158,6 +158,38 @@ func EnsureLocalSSHKey() (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// GetGoInstallAdvice returns the detected platform name and exact command to install Go compiler.
+func GetGoInstallAdvice() (string, string) {
+	if _, err := os.Stat("/data/data/com.termux"); err == nil {
+		return "Termux", "pkg install -y golang"
+	}
+	isRoot := os.Geteuid() == 0
+	sudoPrefix := "sudo "
+	if isRoot {
+		sudoPrefix = ""
+	}
+
+	if _, err := exec.LookPath("apt-get"); err == nil {
+		return "Debian/Ubuntu", fmt.Sprintf("%sapt-get install -y golang-go", sudoPrefix)
+	}
+	if _, err := exec.LookPath("pacman"); err == nil {
+		return "Arch Linux", fmt.Sprintf("%spacman -S --noconfirm go", sudoPrefix)
+	}
+	if _, err := exec.LookPath("dnf"); err == nil {
+		return "Fedora/RHEL", fmt.Sprintf("%sdnf install -y golang", sudoPrefix)
+	}
+	if _, err := exec.LookPath("apk"); err == nil {
+		return "Alpine Linux", fmt.Sprintf("%sapk add go", sudoPrefix)
+	}
+	if _, err := exec.LookPath("zypper"); err == nil {
+		return "openSUSE", fmt.Sprintf("%szypper install -y go", sudoPrefix)
+	}
+	if runtime.GOOS == "darwin" {
+		return "macOS", "brew install go"
+	}
+	return "Linux", "curl -fsSL https://go.dev/dl/ | tar -C /usr/local"
+}
+
 // CmdDoctor executes a comprehensive system and environment diagnostics report.
 func CmdDoctor() {
 	fmt.Printf("\n┌─ [Antigravity Environment Doctor · agy-sync v%s] ────────────────┐\n", config.Version)
@@ -248,23 +280,42 @@ func CmdDoctor() {
 		hasAmd64 = true
 	}
 
+	platformName, installGoCmd := GetGoInstallAdvice()
 	if hasArm64 && hasAmd64 {
 		fmt.Println("│  Cross-Arch Deployment     : 🟢 Ready (Dual-arch cached: arm64, amd64)")
 	} else if hasGo {
 		fmt.Println("│  Cross-Arch Deployment     : 🟢 Ready (Go cross-compiler available)")
 	} else {
-		fmt.Printf("│  Cross-Arch Deployment     : 🟡 Local %s only (Install 'golang' for JIT cross-arch pairing)\n", runtime.GOARCH)
+		fmt.Printf("│  Cross-Arch Deployment     : 🟡 Local %s only (%s: '%s')\n", runtime.GOARCH, platformName, installGoCmd)
 	}
 	fmt.Printf("└─────────────────────────────────────────────────────────────────────────┘\n\n")
 
 	// Recommendations
+	reader := bufio.NewReader(os.Stdin)
 	if !agyOk {
-		reader := bufio.NewReader(os.Stdin)
 		fmt.Print("Would you like to install Antigravity CLI now? [Y/n]: ")
 		text, _ := reader.ReadString('\n')
 		text = strings.ToLower(strings.TrimSpace(text))
 		if text == "" || text == "y" || text == "yes" {
 			CheckAgyCLI(true)
+		}
+	}
+
+	if !hasGo && !(hasArm64 && hasAmd64) {
+		fmt.Printf("Would you like to install Go compiler for cross-architecture deployment (%s)? [y/N]: ", installGoCmd)
+		text, _ := reader.ReadString('\n')
+		text = strings.ToLower(strings.TrimSpace(text))
+		if text == "y" || text == "yes" {
+			fmt.Printf("[⬇️] Installing Go compiler via: %s\n", installGoCmd)
+			cmd := exec.Command("sh", "-c", installGoCmd)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			cmd.Stdin = os.Stdin
+			if err := cmd.Run(); err == nil {
+				fmt.Println("[✅] Go compiler installed successfully.")
+			} else {
+				fmt.Printf("[❌] Installation failed: %v\n", err)
+			}
 		}
 	}
 }

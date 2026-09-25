@@ -63,16 +63,25 @@ if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; 
 
 if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
     echo -e "[⬇️] Installing missing dependencies: ${MISSING_PKGS[*]}..."
+    SUDO="sudo"
+    if [ "$(id -u)" -eq 0 ] || ! command -v sudo >/dev/null 2>&1; then
+        SUDO=""
+    fi
+
     if [ "$IS_TERMUX" = true ]; then
         pkg update -y >/dev/null 2>&1 || true
         pkg install -y "${MISSING_PKGS[@]}"
     elif command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get update -y >/dev/null 2>&1 || true
-        sudo apt-get install -y "${MISSING_PKGS[@]}"
+        $SUDO apt-get update -y >/dev/null 2>&1 || true
+        $SUDO apt-get install -y "${MISSING_PKGS[@]}"
     elif command -v pacman >/dev/null 2>&1; then
-        sudo pacman -Sy --noconfirm "${MISSING_PKGS[@]}"
+        $SUDO pacman -Sy --noconfirm "${MISSING_PKGS[@]}"
     elif command -v dnf >/dev/null 2>&1; then
-        sudo dnf install -y "${MISSING_PKGS[@]}"
+        $SUDO dnf install -y "${MISSING_PKGS[@]}"
+    elif command -v zypper >/dev/null 2>&1; then
+        $SUDO zypper install -y "${MISSING_PKGS[@]}"
+    elif command -v apk >/dev/null 2>&1; then
+        $SUDO apk add "${MISSING_PKGS[@]}"
     else
         echo -e "${COLOR_YELLOW}[⚠️] Could not detect package manager. Please manually install: ${MISSING_PKGS[*]}${COLOR_RESET}"
     fi
