@@ -206,9 +206,25 @@ Examples:
 			tHost = defAlias
 		}
 		if tHost == "" {
+			// Find peer from merged devices.json
+			reg := config.LoadRegistry()
+			for ep, d := range reg {
+				if !d.Deleted && (strings.Contains(ep, host) || d.TailscaleIP == host) {
+					tHost = ep
+					defAlias = d.Alias
+					_, _, p, _ := config.ParseEndpoint(ep, 8022)
+					defPort = p
+					break
+				}
+			}
+		}
+		if tHost == "" {
 			tHost = host
-			defPort = port
 			defAlias = host
+			defPort = 22
+			if _, err := os.Stat("/data/data/com.termux"); err == nil {
+				defPort = 8022
+			}
 		}
 		SyncWithPeer(tHost, defPort, defAlias, false, false, nil, nil)
 	}

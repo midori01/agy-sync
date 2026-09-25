@@ -291,15 +291,35 @@ func MergeRegistries(regA, regB config.Registry, skewB float64) (config.Registry
 			if tA >= tB {
 				cp := *recA
 				cp.LanIps = unionLanIPs(recA.LanIps, recB.LanIps)
+				if cp.TailscaleIP == "" && recB.TailscaleIP != "" {
+					cp.TailscaleIP = recB.TailscaleIP
+				}
+				if cp.User == "" && recB.User != "" {
+					cp.User = recB.User
+				}
 				merged[ep] = &cp
-				if tA > tB || len(cp.LanIps) != len(recB.LanIps) {
+				if tA > tB || len(cp.LanIps) != len(recB.LanIps) || cp.TailscaleIP != recB.TailscaleIP || cp.User != recB.User {
 					bChanged = true
+				}
+				if cp.TailscaleIP != recA.TailscaleIP || cp.User != recA.User {
+					aChanged = true
 				}
 			} else {
 				cp := *recB
 				cp.LanIps = unionLanIPs(recB.LanIps, recA.LanIps)
+				if cp.TailscaleIP == "" && recA.TailscaleIP != "" {
+					cp.TailscaleIP = recA.TailscaleIP
+				}
+				if cp.User == "" && recA.User != "" {
+					cp.User = recA.User
+				}
 				merged[ep] = &cp
-				aChanged = true
+				if tB > tA || len(cp.LanIps) != len(recA.LanIps) || cp.TailscaleIP != recA.TailscaleIP || cp.User != recA.User {
+					aChanged = true
+				}
+				if cp.TailscaleIP != recB.TailscaleIP || cp.User != recB.User {
+					bChanged = true
+				}
 			}
 		}
 	}

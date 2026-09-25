@@ -796,6 +796,7 @@ func HandleSSHCommand(rawArgs []string) {
 		"-o", "ControlMaster=auto",
 		"-o", fmt.Sprintf("ControlPath=%s/cm-%%C", config.SocketDir),
 		"-o", "ControlPersist=60s",
+		"-o", "Ciphers=aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com",
 		effectiveTarget,
 	)
 	sshArgs = append(sshArgs, postArgs...)

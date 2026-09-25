@@ -286,13 +286,20 @@ func ResolveFastestEndpoint(host string, port int, peerName string) (effectiveHo
 			peerData = d
 			break
 		}
-		if peerData == nil {
-			for _, lip := range d.LanIps {
-				if lip == lookupHost {
-					peerData = d
-					break
-				}
+		if d.TailscaleIP != "" && d.TailscaleIP == lookupHost {
+			peerData = d
+			break
+		}
+		foundLan := false
+		for _, lip := range d.LanIps {
+			if lip == lookupHost {
+				peerData = d
+				foundLan = true
+				break
 			}
+		}
+		if foundLan {
+			break
 		}
 	}
 

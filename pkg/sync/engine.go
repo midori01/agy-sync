@@ -117,7 +117,10 @@ func PullRemoteBinaryForLocal(host string, port int, remHome string, remArch str
 	if normLocalArch == normRemArch {
 		stdout, _, _, err := ssh.RunSSHCmd(host, port, fmt.Sprintf("cat '%s' 2>/dev/null", remBin), false)
 		if err == nil && len(stdout) >= 4 && bytes.Equal([]byte(stdout[:4]), []byte{0x7f, 'E', 'L', 'F'}) {
-			return []byte(stdout), nil
+			data := []byte(stdout)
+			if ValidateELFArchitecture(data, normLocalArch) {
+				return data, nil
+			}
 		}
 	}
 
@@ -136,7 +139,10 @@ fi`, remGoDir, normLocalArch, remCommit, remGoDir, remGoDir, remGoDir, normLocal
 
 	stdout, _, _, err := ssh.RunSSHCmd(host, port, pullCmd, false)
 	if err == nil && len(stdout) >= 4 && bytes.Equal([]byte(stdout[:4]), []byte{0x7f, 'E', 'L', 'F'}) {
-		return []byte(stdout), nil
+		data := []byte(stdout)
+		if ValidateELFArchitecture(data, normLocalArch) {
+			return data, nil
+		}
 	}
 
 	return nil, fmt.Errorf("remote %s cannot supply %s binary", host, normLocalArch)

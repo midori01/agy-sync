@@ -142,11 +142,14 @@ func EnsureLocalSSHKey() (string, error) {
 	privFile := filepath.Join(sshDir, "id_ed25519")
 
 	if data, err := os.ReadFile(pubFile); err == nil && len(data) > 0 {
+		_ = os.Chmod(privFile, 0600)
+		_ = os.Chmod(pubFile, 0644)
 		return strings.TrimSpace(string(data)), nil
 	}
 
 	// If private key already exists, derive public key to avoid interactive overwrite prompt
 	if _, err := os.Stat(privFile); err == nil {
+		_ = os.Chmod(privFile, 0600)
 		cmd := exec.Command("ssh-keygen", "-y", "-f", privFile)
 		if out, err := cmd.Output(); err == nil && len(out) > 0 {
 			pubStr := strings.TrimSpace(string(out))
@@ -160,6 +163,8 @@ func EnsureLocalSSHKey() (string, error) {
 	if err := cmd.Run(); err != nil {
 		return "", err
 	}
+	_ = os.Chmod(privFile, 0600)
+	_ = os.Chmod(pubFile, 0644)
 
 	data, err := os.ReadFile(pubFile)
 	if err != nil {
