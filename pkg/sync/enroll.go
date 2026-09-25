@@ -685,7 +685,7 @@ REM_PORT="22"
 if [ -d "/data/data/com.termux" ]; then
     REM_PORT="8022"
 fi
-LAN_IPS="$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/ {print $4}' | cut -d/ -f1) | tr '\n' ',')"
+LAN_IPS="$( (ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/ {print $4}' | cut -d/ -f1) | tr '\n' ',')"
 
 RESP="$(curl -fsSL --data-urlencode "pubkey=$PUB" --data-urlencode "name=$HNAME" --data-urlencode "lan_ips=$LAN_IPS" --data-urlencode "user=$REM_USER" --data-urlencode "port=$REM_PORT" "http://%s:%d/exchange/%s")"
 
