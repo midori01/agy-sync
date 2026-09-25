@@ -228,6 +228,33 @@ func CmdDoctor() {
 	}
 	fmt.Printf("│  Cluster Registry          : 🪪 %d node(s) registered in devices.json\n", activeCount)
 	fmt.Printf("│  Host Architecture         : 💻 %s/%s\n", runtime.GOOS, runtime.GOARCH)
+
+	// 7. Cross-Architecture Engine Readiness
+	hasGo := false
+	if _, err := exec.LookPath("go"); err == nil {
+		hasGo = true
+	}
+	canonDir := filepath.Dir(config.AgySyncScript)
+	hasArm64 := false
+	hasAmd64 := false
+	if data, err := os.ReadFile(filepath.Join(canonDir, "agy-sync-linux-arm64")); err == nil && len(data) > 0 {
+		hasArm64 = true
+	} else if runtime.GOARCH == "arm64" {
+		hasArm64 = true
+	}
+	if data, err := os.ReadFile(filepath.Join(canonDir, "agy-sync-linux-amd64")); err == nil && len(data) > 0 {
+		hasAmd64 = true
+	} else if runtime.GOARCH == "amd64" {
+		hasAmd64 = true
+	}
+
+	if hasArm64 && hasAmd64 {
+		fmt.Println("│  Cross-Arch Deployment     : 🟢 Ready (Dual-arch cached: arm64, amd64)")
+	} else if hasGo {
+		fmt.Println("│  Cross-Arch Deployment     : 🟢 Ready (Go cross-compiler available)")
+	} else {
+		fmt.Printf("│  Cross-Arch Deployment     : 🟡 Local %s only (Install 'golang' for JIT cross-arch pairing)\n", runtime.GOARCH)
+	}
 	fmt.Printf("└─────────────────────────────────────────────────────────────────────────┘\n\n")
 
 	// Recommendations

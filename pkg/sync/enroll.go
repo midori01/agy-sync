@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"runtime"
 
 	"agy-sync/pkg/cluster"
 	"agy-sync/pkg/config"
@@ -406,13 +407,22 @@ cat ~/.ssh/id_ed25519.pub
 	// 7. Deploy agy-sync Synchronizer Engine
 	targetBinaryData, err := GetOrBuildTargetBinary(arch)
 	if err != nil || len(targetBinaryData) == 0 {
-		targetBinaryData, _ = os.ReadFile(config.AgySyncScript)
-	}
-	binSz := int64(len(targetBinaryData))
-	spinEngine := terminal.NewSpinner(fmt.Sprintf("Deploying agy-sync engine (%s)", terminal.FormatBytes(binSz)), true)
-	spinEngine.Start()
+		// Remote architecture binary could not be built/found locally.
+		// Check if remote target has 'go' compiler to build from source directly!
+		remCheckGo := `command -v go 2>/dev/null || echo NONE`
+		stdout, _, _, _ := ssh.RunSSHCmd(sshTarget, port, remCheckGo, false)
+		if strings.TrimSpace(stdout) != "NONE" && strings.TrimSpace(stdout) != "" {
+			fmt.Printf("[💡] Local host lacks Go cross-compiler for %s, but remote target has Go installed. Will build on target.\n", arch)
+		} else {
+			fmt.Printf("[⚠️] Warning: Cannot provide pre-compiled binary for remote architecture '%s' (host is %s, companion binary missing, and Go compiler not installed).\n", arch, runtime.GOARCH)
+			fmt.Println("    👉 Tip: Install 'golang' on Termux ('pkg install golang') or on the target device to enable cross-arch pairing.")
+		}
+	} else {
+		binSz := int64(len(targetBinaryData))
+		spinEngine := terminal.NewSpinner(fmt.Sprintf("Deploying agy-sync engine (%s)", terminal.FormatBytes(binSz)), true)
+		spinEngine.Start()
 
-	deployEngineCmd := `
+		deployEngineCmd := `
 mkdir -p ~/.gemini/antigravity-cli/bin ~/.local/bin
 cat > ~/.gemini/antigravity-cli/bin/agy-sync
 chmod +x ~/.gemini/antigravity-cli/bin/agy-sync
@@ -425,12 +435,13 @@ elif [ -d /data/data/com.termux/files/usr/bin ]; then
     ln -sf ~/.gemini/antigravity-cli/bin/agy-sync /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true
 fi
 `
-	procEngine := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, deployEngineCmd, true)...)
-	procEngine.Stdin = bytes.NewReader(targetBinaryData)
-	if err := procEngine.Run(); err == nil {
-		spinEngine.Stop(fmt.Sprintf("\033[32m✓\033[0m Deploying agy-sync engine... done \033[90m(%s)\033[0m", terminal.FormatBytes(binSz)))
-	} else {
-		spinEngine.Stop(fmt.Sprintf("\033[31m✗\033[0m Deploying agy-sync engine... failed: %v", err))
+		procEngine := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, deployEngineCmd, true)...)
+		procEngine.Stdin = bytes.NewReader(targetBinaryData)
+		if err := procEngine.Run(); err == nil {
+			spinEngine.Stop(fmt.Sprintf("\033[32m✓\033[0m Deploying agy-sync engine... done \033[90m(%s)\033[0m", terminal.FormatBytes(binSz)))
+		} else {
+			spinEngine.Stop(fmt.Sprintf("\033[31m✗\033[0m Deploying agy-sync engine... failed: %v", err))
+		}
 	}
 
 	// 8. Deploy agy-sync-go source & agy-pool Multi-Account Engine
@@ -677,15 +688,27 @@ chmod 600 ~/.ssh/authorized_keys
 echo "$RESP" | grep "^DEVICES_JSON_B64:" | cut -d: -f2 | base64 -d > ~/.gemini/devices.json
 
 echo "[⚡] Downloading agy-sync synchronizer engine..."
-curl -# -fL "http://%s:%d/bin/agy-sync?arch=${ARCH}" -o ~/.gemini/antigravity-cli/bin/agy-sync
-chmod 755 ~/.gemini/antigravity-cli/bin/agy-sync
+curl -# -fL "http://%s:%d/bin/agy-sync?arch=${ARCH}" -o ~/.gemini/antigravity-cli/bin/agy-sync 2>/dev/null || true
 curl -fsSL "http://%s:%d/done" >/dev/null 2>&1 || true
 
-ln -sf ~/.gemini/antigravity-cli/bin/agy-sync ~/.local/bin/agy-sync 2>/dev/null || true
-if [ -d /data/data/com.termux/files/usr/bin ]; then
-    ln -sf ~/.gemini/antigravity-cli/bin/agy-sync /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true
-elif [ -w /usr/local/bin ]; then
-    ln -sf ~/.gemini/antigravity-cli/bin/agy-sync /usr/local/bin/agy-sync 2>/dev/null || true
+if [ -s ~/.gemini/antigravity-cli/bin/agy-sync ] && [ "$(head -c 4 ~/.gemini/antigravity-cli/bin/agy-sync 2>/dev/null)" = $'\x7fELF' ]; then
+    chmod 755 ~/.gemini/antigravity-cli/bin/agy-sync
+    ln -sf ~/.gemini/antigravity-cli/bin/agy-sync ~/.local/bin/agy-sync 2>/dev/null || true
+    if [ -d /data/data/com.termux/files/usr/bin ]; then
+        ln -sf ~/.gemini/antigravity-cli/bin/agy-sync /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true
+    elif [ -w /usr/local/bin ]; then
+        ln -sf ~/.gemini/antigravity-cli/bin/agy-sync /usr/local/bin/agy-sync 2>/dev/null || true
+    fi
+    echo "[✅] agy-sync engine installed successfully."
+else
+    rm -f ~/.gemini/antigravity-cli/bin/agy-sync
+    echo "[⚠️] Peer could not supply a pre-compiled binary for architecture '${ARCH}'."
+    if command -v go >/dev/null 2>&1; then
+        echo "[🔨] Local Go compiler found on this device."
+    else
+        echo "[❌] Architecture '${ARCH}' binary unavailable and 'go' compiler is missing."
+        echo "    👉 To enable cross-architecture pairing: Install 'golang' on either device (e.g. 'pkg install golang' on Termux or 'apt install golang-go' on Linux)."
+    fi
 fi
 
 if ! command -v agy >/dev/null 2>&1; then
@@ -797,10 +820,12 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 	mux.HandleFunc("/bin/agy-sync", func(w http.ResponseWriter, r *http.Request) {
 		qArch := strings.ToLower(r.URL.Query().Get("arch"))
 		binData, err := GetOrBuildTargetBinary(qArch)
-		if err != nil || len(binData) == 0 {
-			binData, _ = os.ReadFile(config.AgySyncScript)
-		}
 		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if err != nil || len(binData) == 0 || !ValidateELFArchitecture(binData, qArch) {
+			fmt.Printf("[⚠️] Client %s requested arch '%s', but no matching binary or Go compiler is available.\n", clientIP, qArch)
+			http.Error(w, fmt.Sprintf("Binary for architecture '%s' unavailable on peer", qArch), http.StatusNotFound)
+			return
+		}
 		fmt.Printf("[⚡] Streaming agy-sync engine binary (%s, %s) to %s...\n", qArch, terminal.FormatBytes(int64(len(binData))), clientIP)
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.Itoa(len(binData)))

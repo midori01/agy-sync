@@ -17,9 +17,31 @@ import (
 	"agy-sync/pkg/ssh"
 )
 
+// ValidateELFArchitecture checks whether the provided byte slice is a valid Linux ELF matching targetArch.
+func ValidateELFArchitecture(data []byte, targetArch string) bool {
+	if len(data) < 20 {
+		return false
+	}
+	if !bytes.Equal(data[:4], []byte{0x7F, 'E', 'L', 'F'}) {
+		return false
+	}
+	eMachine := uint16(data[18]) | (uint16(data[19]) << 8)
+	normArch := "arm64"
+	if strings.Contains(targetArch, "x86_64") || strings.Contains(targetArch, "amd64") {
+		normArch = "amd64"
+	}
+	if normArch == "amd64" {
+		return eMachine == 0x3E // EM_X86_64
+	} else if normArch == "arm64" {
+		return eMachine == 0xB7 // EM_AARCH64
+	}
+	return false
+}
+
 // GetOrBuildTargetBinary provides the correct binary bytes for a target architecture.
 // If targetArch matches runtime.GOARCH, it returns the local installed universal binary directly (0 Go compiler needed!).
-// Otherwise, it checks cache in ~/agy-sync-go/bin or cross-compiles JIT if a local Go compiler is available.
+// Otherwise, it checks companion binaries, build cache, or cross-compiles JIT if a local Go compiler is available.
+// It will NEVER return a binary with mismatched architecture.
 func GetOrBuildTargetBinary(targetArch string) ([]byte, error) {
 	normArch := "arm64"
 	if strings.Contains(targetArch, "x86_64") || strings.Contains(targetArch, "amd64") {
@@ -30,40 +52,51 @@ func GetOrBuildTargetBinary(targetArch string) ([]byte, error) {
 	// Does not require Go compiler on the local machine!
 	if normArch == runtime.GOARCH {
 		if data, err := os.ReadFile(config.AgySyncScript); err == nil && len(data) > 0 {
+			if ValidateELFArchitecture(data, normArch) {
+				return data, nil
+			}
+		}
+	}
+
+	// 2. Check canonical directory companion binary (~/.gemini/antigravity-cli/bin/agy-sync-linux-<arch>)
+	companionBin := filepath.Join(filepath.Dir(config.AgySyncScript), fmt.Sprintf("agy-sync-linux-%s", normArch))
+	if data, err := os.ReadFile(companionBin); err == nil && len(data) > 0 {
+		if ValidateELFArchitecture(data, normArch) {
 			return data, nil
 		}
 	}
 
-	// 2. Check if a pre-compiled or previously cached cross-arch binary exists
+	// 3. Check repository cache in ~/agy-sync-go/bin/agy-sync-linux-<arch>
 	cachedBin := filepath.Join(config.AgySyncGoDir, "bin", fmt.Sprintf("agy-sync-linux-%s", normArch))
 	stampFile := cachedBin + ".commit"
-
 	if stamp, err := os.ReadFile(stampFile); err == nil && strings.TrimSpace(string(stamp)) == config.GitCommit && config.GitCommit != "dev" {
 		if data, err := os.ReadFile(cachedBin); err == nil && len(data) > 0 {
-			return data, nil
+			if ValidateELFArchitecture(data, normArch) {
+				return data, nil
+			}
 		}
 	}
 
-	// 3. JIT cross-compilation: requires local Go toolchain
-	if _, err := exec.LookPath("go"); err != nil {
-		return nil, fmt.Errorf("local Go compiler not available to cross-compile for %s", normArch)
+	// 4. JIT cross-compilation: requires local Go toolchain
+	if _, err := exec.LookPath("go"); err == nil {
+		_ = os.MkdirAll(filepath.Join(config.AgySyncGoDir, "bin"), 0755)
+		ldflags := fmt.Sprintf("-s -w -X agy-sync/pkg/config.GitCommit=%s", config.GitCommit)
+		buildCmd := exec.Command("go", "build", "-trimpath", fmt.Sprintf("-ldflags=%s", ldflags), "-o", cachedBin, "./cmd/agy-sync")
+		buildCmd.Dir = config.AgySyncGoDir
+		buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", fmt.Sprintf("GOARCH=%s", normArch))
+		if out, err := buildCmd.CombinedOutput(); err == nil {
+			_ = os.WriteFile(stampFile, []byte(config.GitCommit), 0644)
+			if data, err := os.ReadFile(cachedBin); err == nil && len(data) > 0 {
+				if ValidateELFArchitecture(data, normArch) {
+					return data, nil
+				}
+			}
+		} else {
+			return nil, fmt.Errorf("JIT cross-compilation for %s failed: %v (%s)", normArch, err, strings.TrimSpace(string(out)))
+		}
 	}
 
-	_ = os.MkdirAll(filepath.Join(config.AgySyncGoDir, "bin"), 0755)
-	ldflags := fmt.Sprintf("-s -w -X agy-sync/pkg/config.GitCommit=%s", config.GitCommit)
-	buildCmd := exec.Command("go", "build", "-trimpath", fmt.Sprintf("-ldflags=%s", ldflags), "-o", cachedBin, "./cmd/agy-sync")
-	buildCmd.Dir = config.AgySyncGoDir
-	buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", fmt.Sprintf("GOARCH=%s", normArch))
-	if out, err := buildCmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("JIT build for %s failed: %v (%s)", normArch, err, strings.TrimSpace(string(out)))
-	}
-
-	_ = os.WriteFile(stampFile, []byte(config.GitCommit), 0644)
-	data, err := os.ReadFile(cachedBin)
-	if err != nil || len(data) == 0 {
-		return nil, fmt.Errorf("built binary for %s is empty or unreadable: %v", normArch, err)
-	}
-	return data, nil
+	return nil, fmt.Errorf("cross-architecture binary for '%s' is unavailable (host is %s, pre-built binary missing, and Go compiler not installed)", normArch, runtime.GOARCH)
 }
 
 // PullRemoteBinaryForLocal retrieves the matching native binary from the remote node

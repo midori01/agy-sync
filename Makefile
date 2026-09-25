@@ -18,10 +18,12 @@ linux-amd64:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" -o bin/agy-sync-linux-amd64 ./cmd/agy-sync
 	@echo "$(GIT_COMMIT)" > bin/agy-sync-linux-amd64.commit
 
-install: all
+install: all linux-arm64 linux-amd64
 	mkdir -p $(BINDIR)
 	cp -f bin/agy-sync $(BINDIR)/agy-sync
-	chmod 755 $(BINDIR)/agy-sync
+	@if [ -f bin/agy-sync-linux-arm64 ]; then cp -f bin/agy-sync-linux-arm64 $(BINDIR)/agy-sync-linux-arm64; fi
+	@if [ -f bin/agy-sync-linux-amd64 ]; then cp -f bin/agy-sync-linux-amd64 $(BINDIR)/agy-sync-linux-amd64; fi
+	chmod 755 $(BINDIR)/agy-sync*
 	@if [ -d /data/data/com.termux/files/usr/bin ]; then ln -sf $(BINDIR)/agy-sync /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true; fi
 	@mkdir -p $(HOME)/.local/bin && ln -sf $(BINDIR)/agy-sync $(HOME)/.local/bin/agy-sync 2>/dev/null || true
 

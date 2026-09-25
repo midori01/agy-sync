@@ -58,6 +58,23 @@ func RunInstall() error {
 		_ = os.Chmod(canonicalBin, 0755)
 	}
 
+	// Copy companion cross-architecture binaries if present in source directory or repo
+	srcDir := filepath.Dir(selfAbs)
+	for _, archName := range []string{"arm64", "amd64"} {
+		compName := fmt.Sprintf("agy-sync-linux-%s", archName)
+		srcComp := filepath.Join(srcDir, compName)
+		dstComp := filepath.Join(canonicalDir, compName)
+		if srcAbs, err := filepath.Abs(srcComp); err == nil && srcAbs != dstComp {
+			if data, err := os.ReadFile(srcComp); err == nil && len(data) > 0 {
+				_ = os.WriteFile(dstComp, data, 0755)
+			}
+		}
+		repoComp := filepath.Join(config.AgySyncGoDir, "bin", compName)
+		if data, err := os.ReadFile(repoComp); err == nil && len(data) > 0 {
+			_ = os.WriteFile(dstComp, data, 0755)
+		}
+	}
+
 	// 2. Establish Global Symlinks
 	var createdLinks []string
 	isTermux := false

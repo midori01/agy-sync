@@ -119,6 +119,16 @@ else
     exit 1
 fi
 
+# Install companion cross-architecture binaries if present (enables instant cross-arch pairing)
+if [ -f "$SCRIPT_DIR/bin/agy-sync-linux-arm64" ]; then
+    cp -f "$SCRIPT_DIR/bin/agy-sync-linux-arm64" "$CANONICAL_DIR/agy-sync-linux-arm64" 2>/dev/null || true
+    chmod 755 "$CANONICAL_DIR/agy-sync-linux-arm64" 2>/dev/null || true
+fi
+if [ -f "$SCRIPT_DIR/bin/agy-sync-linux-amd64" ]; then
+    cp -f "$SCRIPT_DIR/bin/agy-sync-linux-amd64" "$CANONICAL_DIR/agy-sync-linux-amd64" 2>/dev/null || true
+    chmod 755 "$CANONICAL_DIR/agy-sync-linux-amd64" 2>/dev/null || true
+fi
+
 chmod 755 "$CANONICAL_BIN"
 
 # 5. Global System Symlinks
