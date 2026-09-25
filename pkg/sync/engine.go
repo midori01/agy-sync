@@ -25,7 +25,20 @@ func ValidateELFArchitecture(data []byte, targetArch string) bool {
 	if !bytes.Equal(data[:4], []byte{0x7F, 'E', 'L', 'F'}) {
 		return false
 	}
-	eMachine := uint16(data[18]) | (uint16(data[19]) << 8)
+	// data[4] is EI_CLASS: 2 = ELFCLASS64
+	if data[4] != 2 {
+		return false
+	}
+	// data[5] is EI_DATA: 1 = ELFDATA2LSB, 2 = ELFDATA2MSB
+	var eMachine uint16
+	if data[5] == 1 {
+		eMachine = uint16(data[18]) | (uint16(data[19]) << 8)
+	} else if data[5] == 2 {
+		eMachine = (uint16(data[18]) << 8) | uint16(data[19])
+	} else {
+		return false
+	}
+
 	normArch := "arm64"
 	if strings.Contains(targetArch, "x86_64") || strings.Contains(targetArch, "amd64") {
 		normArch = "amd64"

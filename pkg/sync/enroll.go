@@ -668,8 +668,15 @@ fi
 
 mkdir -p ~/.ssh && chmod 700 ~/.ssh
 if [ ! -f ~/.ssh/id_ed25519.pub ]; then
-    ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+    if [ -f ~/.ssh/id_ed25519 ]; then
+        ssh-keygen -y -f ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub 2>/dev/null || true
+    fi
+    if [ ! -f ~/.ssh/id_ed25519.pub ]; then
+        ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -q
+    fi
 fi
+chmod 600 ~/.ssh/id_ed25519 2>/dev/null || true
+chmod 644 ~/.ssh/id_ed25519.pub 2>/dev/null || true
 PUB="$(cat ~/.ssh/id_ed25519.pub)"
 HNAME="$(uname -n 2>/dev/null || echo node)"
 ARCH="$(uname -m 2>/dev/null || echo unknown)"

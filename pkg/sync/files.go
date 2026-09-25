@@ -620,6 +620,7 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
+		_ = os.MkdirAll(config.ConfigDir, 0755)
 		p2 := exec.Command("tar", "-C", config.ConfigDir, "--no-same-owner", "-xzf", "-")
 		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
 			pct := 0.0

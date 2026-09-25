@@ -146,7 +146,7 @@ remote_snap_cmd = (
     f"os.unlink(tmp.name)\" 2>/dev/null || cat '{rem_db}' 2>/dev/null"
 )
 
-ssh_cmd = ["ssh", "-p", "%d", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ControlMaster=auto", "-o", "ControlPath=%s/cm-%%C", "-o", "ControlPersist=60s", "%s", remote_snap_cmd]
+ssh_cmd = ["ssh", "-p", "%d", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ControlMaster=auto", "-o", "ControlPath=%s/cm-%%C", "-o", "ControlPersist=60s", "-o", "Ciphers=aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com", "%s", remote_snap_cmd]
 
 with open(tmp_remote.name, "wb") as f_out:
     subprocess.run(ssh_cmd, stdout=f_out)
@@ -233,7 +233,7 @@ if remote_changed or not rem_snap:
     tmp_out.close()
     write_db(tmp_out.name, merged_rows)
     rem_dir = os.path.dirname(rem_db)
-    push_ssh = ["ssh", "-p", "%d", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ControlMaster=auto", "-o", "ControlPath=%s/cm-%%C", "-o", "ControlPersist=60s", "%s", f"mkdir -p '{rem_dir}' && tmp='{rem_db}.tmp_$$' && {{ cat > \"$tmp\" && mv -f \"$tmp\" '{rem_db}'; }} || (rm -f \"$tmp\" 2>/dev/null; false)"]
+    push_ssh = ["ssh", "-p", "%d", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ControlMaster=auto", "-o", "ControlPath=%s/cm-%%C", "-o", "ControlPersist=60s", "-o", "Ciphers=aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com", "%s", f"mkdir -p '{rem_dir}' && tmp='{rem_db}.tmp_$$' && {{ cat > \"$tmp\" && rm -f '{rem_db}-wal' '{rem_db}-shm' 2>/dev/null && mv -f \"$tmp\" '{rem_db}'; }} || (rm -f \"$tmp\" 2>/dev/null; false)"]
     with open(tmp_out.name, "rb") as f_in:
         subprocess.run(push_ssh, stdin=f_in)
     if os.path.exists(tmp_out.name):
@@ -476,6 +476,7 @@ shutil.rmtree(td, ignore_errors=True)
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(strings.Join(toPull, "\n") + "\n")
 
+		_ = os.MkdirAll(config.ConvDir, 0755)
 		p2 := exec.Command("tar", "-C", config.ConvDir, "--no-same-owner", "-xzf", "-")
 
 		reportProgress(fmt.Sprintf("Conv DBs ↓ [%s/%s (0%%)]", terminal.FormatBytes(0, true), terminal.FormatBytes(totalPullBytes, true)))
@@ -623,6 +624,7 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string, t
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
+		_ = os.MkdirAll(config.AnnDir, 0755)
 		p2 := exec.Command("tar", "-C", config.AnnDir, "--no-same-owner", "-xzf", "-")
 		nBytes, err := RunPipedCommandsWithBytes(p1, p2)
 		if err == nil {
@@ -868,6 +870,7 @@ if os.path.isdir(b):
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
+		_ = os.MkdirAll(config.BrainDir, 0755)
 		p2 := exec.Command("tar", "-C", config.BrainDir, "--no-same-owner", "-xzf", "-")
 		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
 			pct := 0.0
