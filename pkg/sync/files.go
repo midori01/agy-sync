@@ -477,7 +477,7 @@ func SyncHistoryJsonl(host string, port int, remHome string, probeCache map[stri
 	return fmt.Sprintf("%d entries merged", len(list))
 }
 
-func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, onProgress ...func(string)) (int, int) {
+func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedCfg map[string][2]int64, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.ConfigDir, 0755)
 	localFiles := make(map[string][2]int64)
 
@@ -512,32 +512,35 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 		remCfg = config.ToRemotePath(config.ConfigDir, remHome)
 	}
 
-	cmdStr := fmt.Sprintf("mkdir -p '%s' && find '%s' -type f -exec stat -c '%%n\t%%Y\t%%s' {} + 2>/dev/null", remCfg, remCfg)
-	stdout, _, _, _ := ssh.RunSSHCmd(host, port, cmdStr, false)
-	remoteFiles := make(map[string][2]int64)
+	remoteFiles := preprobedCfg
+	if remoteFiles == nil {
+		remoteFiles = make(map[string][2]int64)
+		cmdStr := fmt.Sprintf("mkdir -p '%s' && find '%s' -type f -exec stat -c '%%n\t%%Y\t%%s' {} + 2>/dev/null", remCfg, remCfg)
+		stdout, _, _, _ := ssh.RunSSHCmd(host, port, cmdStr, false)
 
-	for _, line := range strings.Split(stdout, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "\t")
-		if len(parts) >= 3 {
-			fullPath := parts[0]
-			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
-			sz, _ := strconv.ParseInt(parts[2], 10, 64)
-
-			rel := fullPath
-			if strings.HasPrefix(fullPath, remCfg) {
-				rel = strings.TrimLeft(strings.TrimPrefix(fullPath, remCfg), "/")
-			} else if strings.Contains(fullPath, "config/") {
-				rel = fullPath[strings.Index(fullPath, "config/")+7:]
-			}
-			cleanRel := filepath.Clean(rel)
-			if cleanRel == "." || strings.HasPrefix(cleanRel, "..") || filepath.IsAbs(cleanRel) {
+		for _, line := range strings.Split(stdout, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
 				continue
 			}
-			remoteFiles[cleanRel] = [2]int64{mtime, sz}
+			parts := strings.Split(line, "\t")
+			if len(parts) >= 3 {
+				fullPath := parts[0]
+				mtime, _ := strconv.ParseInt(parts[1], 10, 64)
+				sz, _ := strconv.ParseInt(parts[2], 10, 64)
+
+				rel := fullPath
+				if strings.HasPrefix(fullPath, remCfg) {
+					rel = strings.TrimLeft(strings.TrimPrefix(fullPath, remCfg), "/")
+				} else if strings.Contains(fullPath, "config/") {
+					rel = fullPath[strings.Index(fullPath, "config/")+7:]
+				}
+				cleanRel := filepath.Clean(rel)
+				if cleanRel == "." || strings.HasPrefix(cleanRel, "..") || filepath.IsAbs(cleanRel) {
+					continue
+				}
+				remoteFiles[cleanRel] = [2]int64{mtime, sz}
+			}
 		}
 	}
 

@@ -436,9 +436,23 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	sumsStat := SyncConversationSummaries(host, port, clockSkew, remHome, probeCache, tracker)
 	recordAsset("Conversation Index", sumsStat, "📑", strings.Contains(sumsStat, "pushed") || strings.Contains(sumsStat, "pulled") || strings.Contains(sumsStat, "merged"))
 
+	// 5.8 Batch-probe Remote Directory Inventories in 1 single RTT (eliminates 3 network round-trips)
+	stepStatus("Scanning directory inventories")
+	dirInv := BatchProbeDirectoryInventories(host, port, remHome)
+	var preprobedDBs map[string][2]int64
+	var preprobedAnns map[string]int64
+	var preprobedBrain map[string][2]int64
+	var preprobedCfg map[string][2]int64
+	if dirInv != nil {
+		preprobedDBs = dirInv.ConvDBs
+		preprobedAnns = dirInv.Anns
+		preprobedBrain = dirInv.Brain
+		preprobedCfg = dirInv.Configs
+	}
+
 	// 6. Sync Conversation Databases
 	stepStatus("Conversation databases")
-	convPushed, convPulled = SyncConversationDBs(host, port, clockSkew, remHome, tracker, stepStatus)
+	convPushed, convPulled = SyncConversationDBs(host, port, clockSkew, remHome, tracker, preprobedDBs, stepStatus)
 	convChanged := (convPushed > 0 || convPulled > 0)
 	convDesc := "identical"
 	if convChanged {
@@ -448,7 +462,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 7. Sync Annotations
 	stepStatus("Conversation annotations")
-	annPushed, annPulled := SyncAnnotations(host, port, clockSkew, remHome, tracker, stepStatus)
+	annPushed, annPulled := SyncAnnotations(host, port, clockSkew, remHome, tracker, preprobedAnns, stepStatus)
 	annChanged := (annPushed > 0 || annPulled > 0)
 	annDesc := "identical"
 	if annChanged {
@@ -458,7 +472,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 8. Sync Brain Artifacts & Transcripts
 	stepStatus("Brain transcripts & artifacts")
-	brainPushed, brainPulled = SyncBrainSessions(host, port, clockSkew, remHome, tracker, stepStatus)
+	brainPushed, brainPulled = SyncBrainSessions(host, port, clockSkew, remHome, tracker, preprobedBrain, stepStatus)
 	brainChanged := (brainPushed > 0 || brainPulled > 0)
 	brainDesc := "identical"
 	if brainChanged {
@@ -473,7 +487,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 10. Sync Configs & Skills
 	stepStatus("Skills & configurations")
-	cfgPushed, cfgPulled := SyncConfigsAndSkills(host, port, clockSkew, remHome, tracker, stepStatus)
+	cfgPushed, cfgPulled := SyncConfigsAndSkills(host, port, clockSkew, remHome, tracker, preprobedCfg, stepStatus)
 	cfgChanged := (cfgPushed > 0 || cfgPulled > 0)
 	cfgDesc := "identical"
 	if cfgChanged {

@@ -238,3 +238,144 @@ func CopyFile(src, dst string) error {
 	}
 	return nil
 }
+
+type RemoteDirectoryInventory struct {
+	ConvDBs map[string][2]int64 // [mtime, size]
+	Anns    map[string]int64    // mtime
+	Brain   map[string][2]int64 // [mtime, size]
+	Configs map[string][2]int64 // [mtime, size]
+}
+
+func BatchProbeDirectoryInventories(host string, port int, remHome string) *RemoteDirectoryInventory {
+	remConv := config.ConvDir
+	remAnn := config.AnnDir
+	remBrain := config.BrainDir
+	remCfg := config.ConfigDir
+	if remHome != "" {
+		remConv = config.ToRemotePath(config.ConvDir, remHome)
+		remAnn = config.ToRemotePath(config.AnnDir, remHome)
+		remBrain = config.ToRemotePath(config.BrainDir, remHome)
+		remCfg = config.ToRemotePath(config.ConfigDir, remHome)
+	}
+
+	batchScript := fmt.Sprintf(
+		"mkdir -p '%s' '%s' '%s' '%s' 2>/dev/null && ("+
+			"echo '===CONV_START==='; stat -c '%%n %%Y %%s' '%s'/*.db 2>/dev/null; "+
+			"echo '===ANN_START==='; stat -c '%%n %%Y' '%s'/*.pbtxt 2>/dev/null; "+
+			"echo '===BRAIN_START==='; (stat -c '%%n\t%%Y\t%%s' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -c '%%n\t%%Y\t0' '%s'/*/ 2>/dev/null); "+
+			"echo '===CFG_START==='; find '%s' -type f -exec stat -c '%%n\t%%Y\t%%s' {} + 2>/dev/null; "+
+			"echo '===INV_END===')",
+		remConv, remAnn, remBrain, remCfg,
+		remConv,
+		remAnn,
+		remBrain, remBrain,
+		remCfg,
+	)
+
+	stdout, _, _, err := ssh.RunSSHCmd(host, port, batchScript, false)
+	if err != nil || !strings.Contains(stdout, "===CONV_START===") {
+		return nil
+	}
+
+	inv := &RemoteDirectoryInventory{
+		ConvDBs: make(map[string][2]int64),
+		Anns:    make(map[string]int64),
+		Brain:   make(map[string][2]int64),
+		Configs: make(map[string][2]int64),
+	}
+
+	currentSection := ""
+	for _, rawLine := range strings.Split(stdout, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+		switch line {
+		case "===CONV_START===":
+			currentSection = "conv"
+			continue
+		case "===ANN_START===":
+			currentSection = "ann"
+			continue
+		case "===BRAIN_START===":
+			currentSection = "brain"
+			continue
+		case "===CFG_START===":
+			currentSection = "cfg"
+			continue
+		case "===INV_END===":
+			currentSection = ""
+			continue
+		}
+
+		switch currentSection {
+		case "conv":
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				fname := filepath.Base(parts[0])
+				if !strings.HasSuffix(fname, ".db") || fname == ".db" || strings.Contains(fname, "*") || strings.Contains(fname, "/") || strings.Contains(fname, "\\") {
+					continue
+				}
+				mtime, _ := strconv.ParseInt(parts[1], 10, 64)
+				sz, _ := strconv.ParseInt(parts[2], 10, 64)
+				inv.ConvDBs[fname] = [2]int64{mtime, sz}
+			}
+		case "ann":
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				fname := filepath.Base(parts[0])
+				if !strings.HasSuffix(fname, ".pbtxt") || fname == ".pbtxt" || strings.Contains(fname, "*") || strings.Contains(fname, "/") || strings.Contains(fname, "\\") {
+					continue
+				}
+				mtime, _ := strconv.ParseInt(parts[1], 10, 64)
+				inv.Anns[fname] = mtime
+			}
+		case "brain":
+			parts := strings.Split(line, "\t")
+			if len(parts) >= 3 {
+				fullPath := parts[0]
+				mtime, _ := strconv.ParseInt(parts[1], 10, 64)
+				sz, _ := strconv.ParseInt(parts[2], 10, 64)
+
+				var cleanUUID string
+				if strings.Contains(fullPath, "/.system_generated") {
+					sub := fullPath[:strings.Index(fullPath, "/.system_generated")]
+					cleanUUID = filepath.Base(sub)
+				} else {
+					cleanUUID = filepath.Base(strings.TrimRight(fullPath, "/"))
+				}
+
+				cleanUUID = filepath.Clean(cleanUUID)
+				if cleanUUID == "" || cleanUUID == "." || cleanUUID == ".." || strings.Contains(cleanUUID, "/") || strings.Contains(cleanUUID, "\\") {
+					continue
+				}
+
+				if existing, ok := inv.Brain[cleanUUID]; ok && existing[1] > 0 && sz == 0 {
+					continue
+				}
+				inv.Brain[cleanUUID] = [2]int64{mtime, sz}
+			}
+		case "cfg":
+			parts := strings.Split(line, "\t")
+			if len(parts) >= 3 {
+				fullPath := parts[0]
+				mtime, _ := strconv.ParseInt(parts[1], 10, 64)
+				sz, _ := strconv.ParseInt(parts[2], 10, 64)
+
+				rel := fullPath
+				if strings.HasPrefix(fullPath, remCfg) {
+					rel = strings.TrimLeft(strings.TrimPrefix(fullPath, remCfg), "/")
+				} else if strings.Contains(fullPath, "config/") {
+					rel = fullPath[strings.Index(fullPath, "config/")+7:]
+				}
+				cleanRel := filepath.Clean(rel)
+				if cleanRel == "." || strings.HasPrefix(cleanRel, "..") || filepath.IsAbs(cleanRel) {
+					continue
+				}
+				inv.Configs[cleanRel] = [2]int64{mtime, sz}
+			}
+		}
+	}
+
+	return inv
+}

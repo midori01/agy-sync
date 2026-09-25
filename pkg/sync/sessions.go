@@ -295,7 +295,7 @@ except Exception:
 	return CopyFile(src, dst)
 }
 
-func SyncConversationDBs(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, onProgress ...func(string)) (int, int) {
+func SyncConversationDBs(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedDBs map[string][2]int64, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.ConvDir, 0755)
 	localDBs := make(map[string][2]int64)
 
@@ -321,20 +321,23 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 		remConv = config.ToRemotePath(config.ConvDir, remHome)
 	}
 
-	statCmd := fmt.Sprintf("mkdir -p '%s' && stat -c '%%n %%Y %%s' '%s'/*.db 2>/dev/null", remConv, remConv)
-	stdout, _, _, _ := ssh.RunSSHCmd(host, port, statCmd, false)
-	remoteDBs := make(map[string][2]int64)
+	remoteDBs := preprobedDBs
+	if remoteDBs == nil {
+		remoteDBs = make(map[string][2]int64)
+		statCmd := fmt.Sprintf("mkdir -p '%s' && stat -c '%%n %%Y %%s' '%s'/*.db 2>/dev/null", remConv, remConv)
+		stdout, _, _, _ := ssh.RunSSHCmd(host, port, statCmd, false)
 
-	for _, line := range strings.Split(stdout, "\n") {
-		parts := strings.Fields(line)
-		if len(parts) >= 3 {
-			fname := filepath.Base(parts[0])
-			if !strings.HasSuffix(fname, ".db") || fname == ".db" || strings.Contains(fname, "*") || strings.Contains(fname, "/") || strings.Contains(fname, "\\") {
-				continue
+		for _, line := range strings.Split(stdout, "\n") {
+			parts := strings.Fields(line)
+			if len(parts) >= 3 {
+				fname := filepath.Base(parts[0])
+				if !strings.HasSuffix(fname, ".db") || fname == ".db" || strings.Contains(fname, "*") || strings.Contains(fname, "/") || strings.Contains(fname, "\\") {
+					continue
+				}
+				mtime, _ := strconv.ParseInt(parts[1], 10, 64)
+				sz, _ := strconv.ParseInt(parts[2], 10, 64)
+				remoteDBs[fname] = [2]int64{mtime, sz}
 			}
-			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
-			sz, _ := strconv.ParseInt(parts[2], 10, 64)
-			remoteDBs[fname] = [2]int64{mtime, sz}
 		}
 	}
 
@@ -521,7 +524,7 @@ shutil.rmtree(td, ignore_errors=True)
 	return pushedCount, pulledCount
 }
 
-func SyncAnnotations(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, onProgress ...func(string)) (int, int) {
+func SyncAnnotations(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedAnns map[string]int64, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.AnnDir, 0755)
 	localAnns := make(map[string]int64)
 
@@ -541,19 +544,22 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string, t
 		remAnn = config.ToRemotePath(config.AnnDir, remHome)
 	}
 
-	cmdStr := fmt.Sprintf("mkdir -p '%s' && stat -c '%%n %%Y' '%s'/*.pbtxt 2>/dev/null", remAnn, remAnn)
-	stdout, _, _, _ := ssh.RunSSHCmd(host, port, cmdStr, false)
-	remoteAnns := make(map[string]int64)
+	remoteAnns := preprobedAnns
+	if remoteAnns == nil {
+		remoteAnns = make(map[string]int64)
+		cmdStr := fmt.Sprintf("mkdir -p '%s' && stat -c '%%n %%Y' '%s'/*.pbtxt 2>/dev/null", remAnn, remAnn)
+		stdout, _, _, _ := ssh.RunSSHCmd(host, port, cmdStr, false)
 
-	for _, line := range strings.Split(stdout, "\n") {
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			fname := filepath.Base(parts[0])
-			if !strings.HasSuffix(fname, ".pbtxt") || fname == ".pbtxt" || strings.Contains(fname, "*") || strings.Contains(fname, "/") || strings.Contains(fname, "\\") {
-				continue
+		for _, line := range strings.Split(stdout, "\n") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				fname := filepath.Base(parts[0])
+				if !strings.HasSuffix(fname, ".pbtxt") || fname == ".pbtxt" || strings.Contains(fname, "*") || strings.Contains(fname, "/") || strings.Contains(fname, "\\") {
+					continue
+				}
+				mtime, _ := strconv.ParseInt(parts[1], 10, 64)
+				remoteAnns[fname] = mtime
 			}
-			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
-			remoteAnns[fname] = mtime
 		}
 	}
 
@@ -656,7 +662,7 @@ func getSessionDirSize(dir string) int64 {
 	return total
 }
 
-func SyncBrainSessions(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, onProgress ...func(string)) (int, int) {
+func SyncBrainSessions(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedBrain map[string][2]int64, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.BrainDir, 0755)
 	localBrains := make(map[string][2]int64)
 
@@ -685,42 +691,45 @@ func SyncBrainSessions(host string, port int, clockSkew float64, remHome string,
 		remBrain = config.ToRemotePath(config.BrainDir, remHome)
 	}
 
-	// Fast-path: Shell stat for all transcript files and session directories (15-40ms vs 2500ms in Python)
-	statCmd := fmt.Sprintf(
-		"mkdir -p '%s' && (stat -c '%%n\t%%Y\t%%s' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -c '%%n\t%%Y\t0' '%s'/*/ 2>/dev/null)",
-		remBrain, remBrain, remBrain,
-	)
-	stdout, _, _, _ := ssh.RunSSHCmd(host, port, statCmd, false)
-	remoteBrains := make(map[string][2]int64)
+	remoteBrains := preprobedBrain
+	if remoteBrains == nil {
+		// Fast-path: Shell stat for all transcript files and session directories (15-40ms vs 2500ms in Python)
+		statCmd := fmt.Sprintf(
+			"mkdir -p '%s' && (stat -c '%%n\t%%Y\t%%s' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -c '%%n\t%%Y\t0' '%s'/*/ 2>/dev/null)",
+			remBrain, remBrain, remBrain,
+		)
+		stdout, _, _, _ := ssh.RunSSHCmd(host, port, statCmd, false)
+		remoteBrains = make(map[string][2]int64)
 
-	for _, line := range strings.Split(stdout, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.Split(line, "\t")
-		if len(parts) >= 3 {
-			fullPath := parts[0]
-			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
-			sz, _ := strconv.ParseInt(parts[2], 10, 64)
-
-			var cleanUUID string
-			if strings.Contains(fullPath, "/.system_generated") {
-				sub := fullPath[:strings.Index(fullPath, "/.system_generated")]
-				cleanUUID = filepath.Base(sub)
-			} else {
-				cleanUUID = filepath.Base(strings.TrimRight(fullPath, "/"))
-			}
-
-			cleanUUID = filepath.Clean(cleanUUID)
-			if cleanUUID == "" || cleanUUID == "." || cleanUUID == ".." || strings.Contains(cleanUUID, "/") || strings.Contains(cleanUUID, "\\") {
+		for _, line := range strings.Split(stdout, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
 				continue
 			}
+			parts := strings.Split(line, "\t")
+			if len(parts) >= 3 {
+				fullPath := parts[0]
+				mtime, _ := strconv.ParseInt(parts[1], 10, 64)
+				sz, _ := strconv.ParseInt(parts[2], 10, 64)
 
-			if existing, ok := remoteBrains[cleanUUID]; ok && existing[1] > 0 && sz == 0 {
-				continue
+				var cleanUUID string
+				if strings.Contains(fullPath, "/.system_generated") {
+					sub := fullPath[:strings.Index(fullPath, "/.system_generated")]
+					cleanUUID = filepath.Base(sub)
+				} else {
+					cleanUUID = filepath.Base(strings.TrimRight(fullPath, "/"))
+				}
+
+				cleanUUID = filepath.Clean(cleanUUID)
+				if cleanUUID == "" || cleanUUID == "." || cleanUUID == ".." || strings.Contains(cleanUUID, "/") || strings.Contains(cleanUUID, "\\") {
+					continue
+				}
+
+				if existing, ok := remoteBrains[cleanUUID]; ok && existing[1] > 0 && sz == 0 {
+					continue
+				}
+				remoteBrains[cleanUUID] = [2]int64{mtime, sz}
 			}
-			remoteBrains[cleanUUID] = [2]int64{mtime, sz}
 		}
 	}
 

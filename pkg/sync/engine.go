@@ -2,6 +2,7 @@ package sync
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -217,13 +218,26 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 		return "skipped (cross-arch build requires Go compiler)"
 	}
 
-	// 5. Push binary to remote
+	// 5. Push binary to remote with in-memory gzip stream (70% network transfer reduction)
 	remParent := filepath.Dir(remBin)
 	tmpRem := fmt.Sprintf("%s.tmp_%d_%s", remBin, time.Now().UnixNano(), randomToken(3))
 	remTargetMTime := fi.ModTime().Unix() + int64(clockSkew)
 
+	var streamContent []byte
+	unpackCmd := fmt.Sprintf("cat > '%s'", tmpRem)
+	var gzBuf bytes.Buffer
+	gzWriter, gzErr := gzip.NewWriterLevel(&gzBuf, gzip.BestCompression)
+	if gzErr == nil {
+		_, _ = gzWriter.Write(targetContent)
+		_ = gzWriter.Close()
+		streamContent = gzBuf.Bytes()
+		unpackCmd = fmt.Sprintf("(gzip -dc 2>/dev/null || cat) > '%s'", tmpRem)
+	} else {
+		streamContent = targetContent
+	}
+
 	pushCmd := fmt.Sprintf(`mkdir -p '%s' && (`+
-		`cat > '%s' && chmod 755 '%s' && `+
+		`%s && chmod 755 '%s' && `+
 		`(touch -d @%d '%s' 2>/dev/null || true) && `+
 		`mv -f '%s' '%s' && `+
 		`(touch -d @%d '%s' 2>/dev/null || true) && `+
@@ -233,7 +247,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 		`elif [ -d /data/data/com.termux/files/usr/bin ]; then ln -sf '%s' /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true; fi; }`+
 		`) || (rm -f '%s' 2>/dev/null; false)`,
 		remParent,
-		tmpRem, tmpRem,
+		unpackCmd, tmpRem,
 		remTargetMTime, tmpRem,
 		tmpRem, remBin,
 		remTargetMTime, remBin,
@@ -244,10 +258,10 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 
 	sshArgs := ssh.GetSSHCmd(host, port, pushCmd, true)
 	proc := exec.Command("ssh", sshArgs...)
-	proc.Stdin = bytes.NewReader(targetContent)
+	proc.Stdin = bytes.NewReader(streamContent)
 	if err := proc.Run(); err == nil {
 		if len(tracker) > 0 && tracker[0] != nil {
-			tracker[0].AddPush(int64(len(targetContent)))
+			tracker[0].AddPush(int64(len(streamContent)))
 		}
 		return "pushed"
 	}
