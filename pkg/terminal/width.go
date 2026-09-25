@@ -1,8 +1,12 @@
 package terminal
 
 import (
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
+	"unsafe"
 )
 
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*m`)
@@ -104,4 +108,52 @@ func MakeTableDivider(colWidths []int, seps ...string) string {
 		sections[i] = strings.Repeat("─", w+2)
 	}
 	return left + strings.Join(sections, mid) + right
+}
+
+// GetTerminalWidth detects terminal column count safely.
+func GetTerminalWidth() int {
+	type winsize struct {
+		Row    uint16
+		Col    uint16
+		Xpixel uint16
+		Ypixel uint16
+	}
+	var ws winsize
+	_, _, err := syscall.Syscall(syscall.SYS_IOCTL, uintptr(os.Stdout.Fd()), uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
+	if err == 0 && ws.Col > 0 {
+		return int(ws.Col)
+	}
+
+	if cols := os.Getenv("COLUMNS"); cols != "" {
+		if n, err := strconv.Atoi(cols); err == nil && n > 0 {
+			return n
+		}
+	}
+
+	return 80
+}
+
+// TruncateWidth truncates a string so that its visible width does not exceed maxW.
+func TruncateWidth(s string, maxW int) string {
+	if maxW <= 0 {
+		return ""
+	}
+	clean := SanitizeText(s)
+	if StrWidth(clean) <= maxW {
+		return clean
+	}
+	if maxW <= 3 {
+		runes := []rune(clean)
+		for len(runes) > 0 && StrWidth(string(runes)) > maxW {
+			runes = runes[:len(runes)-1]
+		}
+		return string(runes)
+	}
+
+	target := maxW - 3
+	runes := []rune(clean)
+	for len(runes) > 0 && StrWidth(string(runes)) > target {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes) + "..."
 }

@@ -108,9 +108,10 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	stepStatus("Pipeline handshake")
 	handshakeCmd := fmt.Sprintf("%s echo READY && echo \"HOME:$HOME\" && echo \"USER:$(whoami 2>/dev/null || echo \"$USER\")\" && echo \"ARCH:$(uname -m 2>/dev/null || echo unknown)\" && echo \"COMMIT:$(command -v agy-sync >/dev/null 2>&1 && agy-sync --commit 2>/dev/null || echo NONE)\" && echo \"TS_IP:$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null || true)\" && echo \"LAN_IPS:$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/ {print $4}' | cut -d/ -f1) | tr '\\n' ',')\" && (date +%%s.%%N 2>/dev/null || date +%%s)", config.PathPrefix)
 
+	isLanDirect := (routeTier == "LAN Direct")
 	connectTo := 8
-	if host != origHost {
-		connectTo = 3
+	if isLanDirect {
+		connectTo = 4
 	}
 
 	stdout, stderr, _, err := ssh.RunSSHCmd(host, port, handshakeCmd, false, connectTo)
@@ -118,11 +119,16 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	rtt := t1.Sub(t0).Seconds()
 
 	if err != nil || !strings.Contains(stdout, "READY") {
-		if host != origHost {
+		if isLanDirect {
 			if verbose {
 				fmt.Printf("[🔄] LAN direct test unconfirmed, falling back to Tailnet Mesh %s:%d...\n", origHost, origPort)
 			}
-			host, port = origHost, origPort
+			fallbackHost := origHost
+			if strings.Contains(host, "@") && !strings.Contains(fallbackHost, "@") {
+				parts := strings.SplitN(host, "@", 2)
+				fallbackHost = fmt.Sprintf("%s@%s", parts[0], fallbackHost)
+			}
+			host, port = fallbackHost, origPort
 			routeTier = "Tailnet Mesh"
 			routeLat = 0.0
 			stepStatus("Handshake fallback to Tailnet")
@@ -429,7 +435,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 8. Sync Brain Artifacts & Transcripts
 	stepStatus("Brain transcripts & artifacts")
-	brainPushed, brainPulled = SyncBrainSessions(host, port, clockSkew, remHome)
+	brainPushed, brainPulled = SyncBrainSessions(host, port, clockSkew, remHome, stepStatus)
 	brainChanged := (brainPushed > 0 || brainPulled > 0)
 	brainDesc := "identical"
 	if brainChanged {

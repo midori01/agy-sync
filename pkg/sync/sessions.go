@@ -451,9 +451,15 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string) (
 	return pushed, pulled
 }
 
-func SyncBrainSessions(host string, port int, clockSkew float64, remHome string) (int, int) {
+func SyncBrainSessions(host string, port int, clockSkew float64, remHome string, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.BrainDir, 0755)
 	localBrains := make(map[string][2]int64)
+
+	reportProgress := func(msg string) {
+		if len(onProgress) > 0 && onProgress[0] != nil {
+			onProgress[0](msg)
+		}
+	}
 
 	entries, err := os.ReadDir(config.BrainDir)
 	if err == nil {
@@ -559,8 +565,28 @@ if os.path.isdir(b):
 
 	pushedCount := 0
 	if len(toPush) > 0 {
+		reportProgress(fmt.Sprintf("Brain push (%d session%s)", len(toPush), func() string {
+			if len(toPush) > 1 {
+				return "s"
+			}
+			return ""
+		}()))
 		inputList := strings.Join(toPush, "\n") + "\n"
-		p1 := exec.Command("tar", "--warning=no-file-changed", "-C", config.BrainDir, "-czf", "-", "-T", "-")
+		tarArgs := []string{
+			"--warning=no-file-changed",
+			"--exclude=*/scratch/apktool_out*",
+			"--exclude=*/scratch/jadx_*",
+			"--exclude=*/scratch/mtb_*",
+			"--exclude=*/scratch/*.apk",
+			"--exclude=*/scratch/*.dex",
+			"--exclude=*/scratch/node_modules*",
+			"--exclude=*/scratch/build*",
+			"--exclude=*/scratch/target*",
+			"-C", config.BrainDir,
+			"-czf", "-",
+			"-T", "-",
+		}
+		p1 := exec.Command("tar", tarArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remBrain, remBrain), true)
@@ -572,8 +598,15 @@ if os.path.isdir(b):
 
 	pulledCount := 0
 	if len(toPull) > 0 {
+		reportProgress(fmt.Sprintf("Brain pull (%d session%s)", len(toPull), func() string {
+			if len(toPull) > 1 {
+				return "s"
+			}
+			return ""
+		}()))
 		inputList := strings.Join(toPull, "\n") + "\n"
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar --warning=no-file-changed -C '%s' -czf - -T -", remBrain), true)
+		remTarCmd := fmt.Sprintf("tar --warning=no-file-changed --exclude='*/scratch/apktool_out*' --exclude='*/scratch/jadx_*' --exclude='*/scratch/mtb_*' --exclude='*/scratch/*.apk' --exclude='*/scratch/*.dex' --exclude='*/scratch/node_modules*' --exclude='*/scratch/build*' --exclude='*/scratch/target*' -C '%s' -czf - -T -", remBrain)
+		sshArgs := ssh.GetSSHCmd(host, port, remTarCmd, true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 

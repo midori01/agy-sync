@@ -66,3 +66,22 @@ func TestMakeTableDivider(t *testing.T) {
 		t.Errorf("MakeTableDivider produced invalid borders: %s", div)
 	}
 }
+
+func TestTruncateWidth(t *testing.T) {
+	longStr := "Syncing with node 'xiaomi' (100.103.188.14:8022) · Brain transcripts & artifacts"
+	for maxW := 1; maxW <= 100; maxW++ {
+		truncated := TruncateWidth(longStr, maxW)
+		w := StrWidth(truncated)
+		if w > maxW {
+			t.Errorf("TruncateWidth(%d) gave width %d > maxW (str=%q)", maxW, w, truncated)
+		}
+	}
+}
+
+func TestGetTerminalWidth(t *testing.T) {
+	w := GetTerminalWidth()
+	if w <= 0 {
+		t.Errorf("GetTerminalWidth returned non-positive value: %d", w)
+	}
+}
+

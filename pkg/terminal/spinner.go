@@ -85,19 +85,42 @@ func (s *Spinner) Start() {
 				frame := SpinnerFrames[idx%len(SpinnerFrames)]
 				elapsed := time.Since(s.t0).Seconds()
 
-				s.mu.Lock()
-				sub := ""
-				if s.subStatus != "" {
-					sub = fmt.Sprintf(" \033[90m·\033[0m %s", s.subStatus)
+				termW := GetTerminalWidth()
+				maxW := termW - 1
+				if maxW < 20 {
+					maxW = 20
 				}
-				text := fmt.Sprintf("\r\033[1;36m%s\033[0m %s%s \033[90m(%.1fs)\033[0m", frame, s.prefix, sub, elapsed)
+
+				s.mu.Lock()
+				framePart := fmt.Sprintf("\033[1;36m%s\033[0m ", frame)
+				timePart := fmt.Sprintf(" \033[90m(%.1fs)\033[0m", elapsed)
+				budget := maxW - StrWidth(framePart) - StrWidth(timePart)
+				if budget < 8 {
+					budget = 8
+				}
+
+				mainText := s.prefix
+				if s.subStatus != "" {
+					mainText = fmt.Sprintf("%s · %s", s.prefix, s.subStatus)
+				}
+				if StrWidth(mainText) > budget {
+					mainText = TruncateWidth(mainText, budget)
+				}
+
+				text := fmt.Sprintf("\r%s%s%s", framePart, mainText, timePart)
 				w := StrWidth(text)
 				padLen := 0
 				if s.lastLineLen > w {
 					padLen = s.lastLineLen - w
 				}
+				if w+padLen > maxW {
+					padLen = maxW - w
+					if padLen < 0 {
+						padLen = 0
+					}
+				}
 				fmt.Print(text + strings.Repeat(" ", padLen))
-				s.lastLineLen = w
+				s.lastLineLen = w + padLen
 				s.mu.Unlock()
 
 				idx++
