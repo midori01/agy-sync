@@ -41,6 +41,7 @@ func GetSSHCmd(host string, port int, cmd string, batch bool, connectTimeout ...
 		"-o", "ControlMaster=auto",
 		"-o", fmt.Sprintf("ControlPath=%s/cm-%%C", config.SocketDir),
 		"-o", "ControlPersist=60s",
+		"-o", "Ciphers=aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com",
 	}
 
 	if batch {
@@ -69,6 +70,20 @@ func RunSSHCmd(host string, port int, cmd string, check bool, connectTimeout ...
 
 	if proc.ProcessState != nil {
 		exitCode = proc.ProcessState.ExitCode()
+	}
+
+	// Auto-recovery: If control master died, exchange failed, or connection corrupted, purge socket and retry once
+	if err != nil && (strings.Contains(stderr, "master hello exchange failed") || strings.Contains(stderr, "Connection corrupted") || strings.Contains(stderr, "Failed to connect to new control master") || strings.Contains(stderr, "Bad packet length")) {
+		CloseControlMaster(host, port)
+		proc = exec.Command("ssh", sshArgs...)
+		outBuf.Reset()
+		errBuf.Reset()
+		err = proc.Run()
+		stdout = outBuf.String()
+		stderr = errBuf.String()
+		if proc.ProcessState != nil {
+			exitCode = proc.ProcessState.ExitCode()
+		}
 	}
 
 	if err != nil && check {
@@ -145,6 +160,7 @@ func CloseControlMaster(host string, port int) {
 	}
 	cmd := exec.Command("ssh", sshArgs...)
 	_ = cmd.Run()
+	CleanupStaleControlSockets()
 }
 
 // KillAllControlMasters cleanly exits and purges all ControlMaster sockets in SocketDir.
@@ -285,6 +301,7 @@ func ReconcileSSHConfig(reg ...config.Registry) {
 			"  ControlMaster auto",
 			fmt.Sprintf("  ControlPath %s/cm-%%C", config.SocketDir),
 			"  ControlPersist 60s",
+			"  Ciphers aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com",
 		)
 		entryBlocks = append(entryBlocks, strings.Join(entryLines, "\n"))
 
