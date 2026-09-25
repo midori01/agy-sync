@@ -3,6 +3,7 @@ package sync
 import (
 	"encoding/base64"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,47 @@ import (
 	"agy-sync/pkg/ssh"
 	"agy-sync/pkg/terminal"
 )
+
+// CompareFileParity safely compares local and remote file metadata (mtime, size)
+// while protecting against false-positive syncs caused by inter-device wall-clock skew.
+// Returns:
+//  0: identical (no sync needed)
+//  1: local is newer (needs push)
+// -1: remote is newer (needs pull)
+func CompareFileParity(locMTime, locSize, remRawMTime, remSize int64, clockSkew float64) int {
+	// 1. Identity Short-Circuit:
+	// If file sizes are strictly identical and raw mtimes are identical, it is 100% the exact same file!
+	// (Preserved via tar/chtimes during previous sync). Never manipulate raw timestamps.
+	if locSize == remSize && locMTime == remRawMTime {
+		return 0
+	}
+
+	// 2. Strict size inequality takes precedence for SQLite databases & append logs
+	if locSize > remSize {
+		return 1
+	} else if remSize > locSize {
+		return -1
+	}
+
+	// 3. File sizes are identical (locSize == remSize), but raw mtimes differ:
+	// Use clock-skew normalized comparison with an adaptive tolerance window.
+	// The tolerance must absorb network jitter and clock measurement inaccuracy:
+	// tolerance = max(5, abs(clockSkew) + 3)
+	tolerance := int64(math.Abs(clockSkew)) + 3
+	if tolerance < 5 {
+		tolerance = 5
+	}
+
+	normRemMTime := remRawMTime - int64(clockSkew)
+	if locMTime > normRemMTime+tolerance {
+		return 1
+	} else if normRemMTime > locMTime+tolerance {
+		return -1
+	}
+
+	// Difference falls within clock drift window and sizes are identical -> identical!
+	return 0
+}
 
 func SyncConversationSummaries(host string, port int, clockSkew float64, remHome string, tracker ...*ByteTracker) string {
 	if _, err := os.Stat(config.SummariesDBFile); err != nil {
@@ -129,19 +171,29 @@ for cid in all_ids:
         merged_rows[cid] = remote_rows[cid]
         local_changed = True
     else:
-        l_ts = parse_iso(local_rows[cid].get("last_modified_time"))
-        r_ts = parse_iso(remote_rows[cid].get("last_modified_time"))
-        if l_ts > 0 and r_ts > 0:
-            norm_r_ts = r_ts - clock_skew
-            if l_ts >= norm_r_ts:
-                merged_rows[cid] = local_rows[cid]
-                if l_ts > norm_r_ts:
-                    remote_changed = True
-            else:
-                merged_rows[cid] = remote_rows[cid]
-                local_changed = True
-        else:
+        l_raw_str = str(local_rows[cid].get("last_modified_time") or "")
+        r_raw_str = str(remote_rows[cid].get("last_modified_time") or "")
+        if l_raw_str != "" and l_raw_str == r_raw_str:
             merged_rows[cid] = local_rows[cid]
+        else:
+            l_ts = parse_iso(l_raw_str)
+            r_ts = parse_iso(r_raw_str)
+            if l_ts > 0 and r_ts > 0:
+                if abs(l_ts - r_ts) < 0.001:
+                    merged_rows[cid] = local_rows[cid]
+                else:
+                    norm_r_ts = r_ts - clock_skew
+                    tol = max(5.0, abs(clock_skew) + 3.0)
+                    if l_ts > norm_r_ts + tol:
+                        merged_rows[cid] = local_rows[cid]
+                        remote_changed = True
+                    elif norm_r_ts > l_ts + tol:
+                        merged_rows[cid] = remote_rows[cid]
+                        local_changed = True
+                    else:
+                        merged_rows[cid] = local_rows[cid]
+            else:
+                merged_rows[cid] = local_rows[cid]
 
 def write_db(db_path, rows):
     conn = sqlite3.connect(db_path, timeout=30.0)
@@ -265,7 +317,7 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 			}
 			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
 			sz, _ := strconv.ParseInt(parts[2], 10, 64)
-			remoteDBs[fname] = [2]int64{mtime - int64(clockSkew), sz}
+			remoteDBs[fname] = [2]int64{mtime, sz}
 		}
 	}
 
@@ -286,13 +338,10 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 		} else if inRem && !inLoc {
 			toPull = append(toPull, k)
 		} else {
-			if loc[1] > rem[1] {
+			cmp := CompareFileParity(loc[0], loc[1], rem[0], rem[1], clockSkew)
+			if cmp > 0 {
 				toPush = append(toPush, k)
-			} else if rem[1] > loc[1] {
-				toPull = append(toPull, k)
-			} else if loc[0] > rem[0]+5 {
-				toPush = append(toPush, k)
-			} else if rem[0] > loc[0]+5 {
+			} else if cmp < 0 {
 				toPull = append(toPull, k)
 			}
 		}
@@ -487,19 +536,41 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string, t
 				continue
 			}
 			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
-			remoteAnns[fname] = mtime - int64(clockSkew)
+			remoteAnns[fname] = mtime
 		}
 	}
 
 	var toPush, toPull []string
+	tol := int64(math.Abs(clockSkew)) + 3
+	if tol < 5 {
+		tol = 5
+	}
 	for k, locMTime := range localAnns {
-		if remMTime, ok := remoteAnns[k]; !ok || locMTime > remMTime+2 {
+		remMTime, ok := remoteAnns[k]
+		if !ok {
 			toPush = append(toPush, k)
+		} else if locMTime == remMTime {
+			// Identity short-circuit
+			continue
+		} else {
+			normRem := remMTime - int64(clockSkew)
+			if locMTime > normRem+tol {
+				toPush = append(toPush, k)
+			}
 		}
 	}
 	for k, remMTime := range remoteAnns {
-		if locMTime, ok := localAnns[k]; !ok || remMTime > locMTime+2 {
+		locMTime, ok := localAnns[k]
+		if !ok {
 			toPull = append(toPull, k)
+		} else if locMTime == remMTime {
+			// Identity short-circuit
+			continue
+		} else {
+			normRem := remMTime - int64(clockSkew)
+			if normRem > locMTime+tol {
+				toPull = append(toPull, k)
+			}
 		}
 	}
 	sort.Strings(toPush)
@@ -628,7 +699,7 @@ if os.path.isdir(b):
 			}
 			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
 			sz, _ := strconv.ParseInt(parts[2], 10, 64)
-			remoteBrains[cleanUUID] = [2]int64{mtime - int64(clockSkew), sz}
+			remoteBrains[cleanUUID] = [2]int64{mtime, sz}
 		}
 	}
 
@@ -644,7 +715,7 @@ if os.path.isdir(b):
 					continue
 				}
 				mtime, _ := strconv.ParseInt(parts[1], 10, 64)
-				remoteBrains[cleanUUID] = [2]int64{mtime - int64(clockSkew), 0}
+				remoteBrains[cleanUUID] = [2]int64{mtime, 0}
 			}
 		}
 	}
@@ -666,13 +737,10 @@ if os.path.isdir(b):
 		} else if inRem && !inLoc {
 			toPull = append(toPull, k)
 		} else {
-			if loc[0] > rem[0]+5 {
+			cmp := CompareFileParity(loc[0], loc[1], rem[0], rem[1], clockSkew)
+			if cmp > 0 {
 				toPush = append(toPush, k)
-			} else if rem[0] > loc[0]+5 {
-				toPull = append(toPull, k)
-			} else if loc[1] > rem[1] {
-				toPush = append(toPush, k)
-			} else if rem[1] > loc[1] {
+			} else if cmp < 0 {
 				toPull = append(toPull, k)
 			}
 		}

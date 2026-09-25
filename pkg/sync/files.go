@@ -451,13 +451,19 @@ func SyncHistoryJsonl(host string, port int, remHome string, probeCache map[stri
 		proc := exec.Command("ssh", sshArgs...)
 		proc.Stdin = strings.NewReader(mergedContent)
 		if err := proc.Run(); err != nil {
-			// Retry once with clean socket to recover from stale connection
+			// Retry with clean socket to recover from stale connection or mobile sleep
 			ssh.CloseControlMaster(host, port)
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(1200 * time.Millisecond)
 			procRetry := exec.Command("ssh", ssh.GetSSHCmd(host, port, cmd, true)...)
 			procRetry.Stdin = strings.NewReader(mergedContent)
 			if errRetry := procRetry.Run(); errRetry != nil {
-				return "failed to update remote history"
+				ssh.CloseControlMaster(host, port)
+				time.Sleep(2000 * time.Millisecond)
+				procRetry2 := exec.Command("ssh", ssh.GetSSHCmd(host, port, cmd, true)...)
+				procRetry2.Stdin = strings.NewReader(mergedContent)
+				if errRetry2 := procRetry2.Run(); errRetry2 != nil {
+					return "failed to update remote history"
+				}
 			}
 		}
 		if len(tracker) > 0 && tracker[0] != nil {
@@ -520,7 +526,6 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 			fullPath := parts[0]
 			mtime, _ := strconv.ParseInt(parts[1], 10, 64)
 			sz, _ := strconv.ParseInt(parts[2], 10, 64)
-			remMTime := mtime - int64(clockSkew)
 
 			rel := fullPath
 			if strings.HasPrefix(fullPath, remCfg) {
@@ -532,23 +537,32 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 			if cleanRel == "." || strings.HasPrefix(cleanRel, "..") || filepath.IsAbs(cleanRel) {
 				continue
 			}
-			remoteFiles[cleanRel] = [2]int64{remMTime, sz}
+			remoteFiles[cleanRel] = [2]int64{mtime, sz}
 		}
 	}
 
 	var toPush, toPull []string
-	for k, loc := range localFiles {
-		if rem, ok := remoteFiles[k]; !ok {
-			toPush = append(toPush, k)
-		} else if loc[0] > rem[0]+2 || (loc[1] != rem[1] && loc[0] > rem[0]) {
-			toPush = append(toPush, k)
-		}
+	allKeys := make(map[string]bool)
+	for k := range localFiles {
+		allKeys[k] = true
 	}
-	for k, rem := range remoteFiles {
-		if loc, ok := localFiles[k]; !ok {
+	for k := range remoteFiles {
+		allKeys[k] = true
+	}
+	for k := range allKeys {
+		loc, inLoc := localFiles[k]
+		rem, inRem := remoteFiles[k]
+		if inLoc && !inRem {
+			toPush = append(toPush, k)
+		} else if inRem && !inLoc {
 			toPull = append(toPull, k)
-		} else if rem[0] > loc[0]+2 || (rem[1] != loc[1] && rem[0] > loc[0]) {
-			toPull = append(toPull, k)
+		} else {
+			cmp := CompareFileParity(loc[0], loc[1], rem[0], rem[1], clockSkew)
+			if cmp > 0 {
+				toPush = append(toPush, k)
+			} else if cmp < 0 {
+				toPull = append(toPull, k)
+			}
 		}
 	}
 	sort.Strings(toPush)
