@@ -775,7 +775,7 @@ func EnsureSelfUpToDate() {
 	tmpBin := fmt.Sprintf("%s.tmp_self_%d_%s", AgySyncScript, time.Now().UnixNano(), RandomToken(3))
 	cmd := exec.Command("go", "build", "-trimpath", fmt.Sprintf("-ldflags=%s", ldflags), "-o", tmpBin, "./cmd/agy-sync")
 	cmd.Dir = AgySyncGoDir
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", fmt.Sprintf("GOARCH=%s", runtime.GOARCH))
+	cmd.Env = append(os.Environ(), "CGO_ENABLED=0", fmt.Sprintf("GOOS=%s", runtime.GOOS), fmt.Sprintf("GOARCH=%s", runtime.GOARCH))
 	if err := cmd.Run(); err == nil {
 		_ = os.Rename(tmpBin, AgySyncScript)
 		_ = os.Chmod(AgySyncScript, 0755)

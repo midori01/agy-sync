@@ -37,15 +37,19 @@ case "$ARCH" in
 esac
 
 OS_TYPE="$(uname -s | tr '[:upper:]' '[:lower:]')"
-if [ "$OS_TYPE" != "linux" ] && [ "$IS_TERMUX" = false ]; then
-    printf "%b[❌] Unsupported OS: %s. agy-sync currently supports Linux and Android Termux.%b\n" "${COLOR_RED}" "${OS_TYPE}" "${COLOR_RESET}"
-    exit 1
-fi
-
-if [ "$IS_TERMUX" = true ]; then
-    printf "[🔍] Detected Platform: Android Termux (%s)\n" "${TARGET_ARCH}"
+if [ "$OS_TYPE" = "darwin" ]; then
+    OS_NAME="darwin"
+    printf "[🔍] Detected Platform: macOS (%s)\n" "${TARGET_ARCH}"
+elif [ "$OS_TYPE" = "linux" ] || [ "$IS_TERMUX" = true ]; then
+    OS_NAME="linux"
+    if [ "$IS_TERMUX" = true ]; then
+        printf "[🔍] Detected Platform: Android Termux (%s)\n" "${TARGET_ARCH}"
+    else
+        printf "[🔍] Detected Platform: Linux (%s)\n" "${TARGET_ARCH}"
+    fi
 else
-    printf "[🔍] Detected Platform: Linux (%s)\n" "${TARGET_ARCH}"
+    printf "%b[❌] Unsupported OS: %s. agy-sync currently supports Linux, Android Termux, and macOS.%b\n" "${COLOR_RED}" "${OS_TYPE}" "${COLOR_RESET}"
+    exit 1
 fi
 
 # 2. Dependency Check & Auto-Installation
@@ -84,6 +88,9 @@ if [ -n "$MISSING_PKGS" ]; then
     elif command -v apk >/dev/null 2>&1; then
         # shellcheck disable=SC2086
         $SUDO apk add $MISSING_PKGS
+    elif command -v brew >/dev/null 2>&1; then
+        # shellcheck disable=SC2086
+        brew install $MISSING_PKGS || true
     else
         printf "%b[⚠️] Could not detect package manager. Please manually install:%s%b\n" "${COLOR_YELLOW}" "${MISSING_PKGS}" "${COLOR_RESET}"
     fi
@@ -116,15 +123,18 @@ else
     SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd || pwd)"
 fi
 
-if [ -f "$SCRIPT_DIR/bin/agy-sync" ]; then
+if [ -f "$SCRIPT_DIR/bin/agy-sync-${OS_NAME}-${TARGET_ARCH}" ]; then
+    printf "[📦] Installing pre-built architecture binary (%s-%s)...\n" "${OS_NAME}" "${TARGET_ARCH}"
+    cp -f "$SCRIPT_DIR/bin/agy-sync-${OS_NAME}-${TARGET_ARCH}" "$CANONICAL_BIN"
+elif [ -f "$SCRIPT_DIR/bin/agy-sync" ] && [ "$OS_NAME" = "linux" ]; then
     printf "[📦] Installing binary from repository build...\n"
     cp -f "$SCRIPT_DIR/bin/agy-sync" "$CANONICAL_BIN"
-elif [ -f "$SCRIPT_DIR/bin/agy-sync-linux-${TARGET_ARCH}" ]; then
-    printf "[📦] Installing pre-built architecture binary (linux-%s)...\n" "${TARGET_ARCH}"
-    cp -f "$SCRIPT_DIR/bin/agy-sync-linux-${TARGET_ARCH}" "$CANONICAL_BIN"
 elif command -v go >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/cmd/agy-sync/main.go" ]; then
     printf "[🔨] Compiling agy-sync from Go source...\n"
     (cd "$SCRIPT_DIR" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$CANONICAL_BIN" ./cmd/agy-sync)
+elif [ -f "$SCRIPT_DIR/bin/agy-sync" ]; then
+    printf "[📦] Installing binary from repository build...\n"
+    cp -f "$SCRIPT_DIR/bin/agy-sync" "$CANONICAL_BIN"
 elif [ -f "./agy-sync" ]; then
     printf "[📦] Installing current directory agy-sync binary...\n"
     cp -f "./agy-sync" "$CANONICAL_BIN"
@@ -133,15 +143,13 @@ else
     exit 1
 fi
 
-# Install companion cross-architecture binaries if present (enables instant cross-arch pairing)
-if [ -f "$SCRIPT_DIR/bin/agy-sync-linux-arm64" ]; then
-    cp -f "$SCRIPT_DIR/bin/agy-sync-linux-arm64" "$CANONICAL_DIR/agy-sync-linux-arm64" 2>/dev/null || true
-    chmod 755 "$CANONICAL_DIR/agy-sync-linux-arm64" 2>/dev/null || true
-fi
-if [ -f "$SCRIPT_DIR/bin/agy-sync-linux-amd64" ]; then
-    cp -f "$SCRIPT_DIR/bin/agy-sync-linux-amd64" "$CANONICAL_DIR/agy-sync-linux-amd64" 2>/dev/null || true
-    chmod 755 "$CANONICAL_DIR/agy-sync-linux-amd64" 2>/dev/null || true
-fi
+# Install companion cross-architecture binaries if present (enables instant cross-platform pairing)
+for comp in linux-arm64 linux-amd64 darwin-arm64 darwin-amd64; do
+    if [ -f "$SCRIPT_DIR/bin/agy-sync-$comp" ]; then
+        cp -f "$SCRIPT_DIR/bin/agy-sync-$comp" "$CANONICAL_DIR/agy-sync-$comp" 2>/dev/null || true
+        chmod 755 "$CANONICAL_DIR/agy-sync-$comp" 2>/dev/null || true
+    fi
+done
 
 chmod 755 "$CANONICAL_BIN"
 
@@ -168,18 +176,21 @@ else
         sudo ln -sf "$CANONICAL_BIN" /usr/local/bin/agy-sync 2>/dev/null || true
     fi
 
-    # Ensure PATH contains ~/.local/bin
-    case ":$PATH:" in
-        *":$HOME/.local/bin:"*) ;;
-        *)
-            RC_FILE="$HOME/.bashrc"
-            if [ -n "$ZSH_VERSION" ] || [ -f "$HOME/.zshrc" ]; then
-                RC_FILE="$HOME/.zshrc"
-            fi
-            printf "\nexport PATH=\"\$HOME/.local/bin:\$PATH\"\n" >> "$RC_FILE"
-            printf "    • Exported PATH to %s\n" "$RC_FILE"
-            ;;
-    esac
+    # Ensure PATH contains ~/.local/bin across user profiles
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.bash_profile"; do
+        if [ -f "$rc" ] || [ "$(basename "$rc")" = ".bashrc" ] || [ "$(basename "$rc")" = ".zshrc" ]; then
+            touch "$rc" 2>/dev/null || true
+            case ":$PATH:" in
+                *":$HOME/.local/bin:"*) ;;
+                *)
+                    if ! grep -Fq 'PATH="$HOME/.local/bin:$PATH"' "$rc" 2>/dev/null; then
+                        printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
+                        printf "    • Exported PATH to %s\n" "$rc"
+                    fi
+                    ;;
+            esac
+        fi
+    done
 fi
 
 # 6. SSH Keypair Validation

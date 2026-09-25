@@ -59,3 +59,64 @@ func TestValidateELFArchitecture(t *testing.T) {
 		t.Errorf("expected 32-bit ELF to FAIL validation")
 	}
 }
+
+func TestValidateBinaryArchitecture(t *testing.T) {
+	// Fake Darwin Mach-O 64-bit AMD64 (MH_MAGIC_64 = 0xCF, 0xFA, 0xED, 0xFE, cputype = 0x01000007)
+	darwinAmd64 := make([]byte, 64)
+	copy(darwinAmd64[:4], []byte{0xCF, 0xFA, 0xED, 0xFE})
+	darwinAmd64[4] = 0x07
+	darwinAmd64[5] = 0x00
+	darwinAmd64[6] = 0x00
+	darwinAmd64[7] = 0x01
+
+	// Fake Darwin Mach-O 64-bit ARM64 (MH_MAGIC_64 = 0xCF, 0xFA, 0xED, 0xFE, cputype = 0x0100000C)
+	darwinArm64 := make([]byte, 64)
+	copy(darwinArm64[:4], []byte{0xCF, 0xFA, 0xED, 0xFE})
+	darwinArm64[4] = 0x0C
+	darwinArm64[5] = 0x00
+	darwinArm64[6] = 0x00
+	darwinArm64[7] = 0x01
+
+	// Fake Darwin Universal / Fat binary (0xCA, 0xFE, 0xBA, 0xBE)
+	darwinFat := make([]byte, 64)
+	copy(darwinFat[:4], []byte{0xCA, 0xFE, 0xBA, 0xBE})
+
+	// 1. Darwin AMD64
+	if !ValidateBinaryArchitecture(darwinAmd64, "darwin", "amd64") {
+		t.Errorf("expected darwinAmd64 to be valid for darwin/amd64")
+	}
+	if !ValidateBinaryArchitecture(darwinAmd64, "macos", "x86_64") {
+		t.Errorf("expected darwinAmd64 to be valid for macos/x86_64")
+	}
+	if ValidateBinaryArchitecture(darwinAmd64, "darwin", "arm64") {
+		t.Errorf("expected darwinAmd64 to FAIL for darwin/arm64")
+	}
+	if ValidateBinaryArchitecture(darwinAmd64, "linux", "amd64") {
+		t.Errorf("expected darwinAmd64 to FAIL for linux/amd64")
+	}
+
+	// 2. Darwin ARM64
+	if !ValidateBinaryArchitecture(darwinArm64, "darwin", "arm64") {
+		t.Errorf("expected darwinArm64 to be valid for darwin/arm64")
+	}
+	if !ValidateBinaryArchitecture(darwinArm64, "macos", "aarch64") {
+		t.Errorf("expected darwinArm64 to be valid for macos/aarch64")
+	}
+	if ValidateBinaryArchitecture(darwinArm64, "darwin", "amd64") {
+		t.Errorf("expected darwinArm64 to FAIL for darwin/amd64")
+	}
+	if ValidateBinaryArchitecture(darwinArm64, "linux", "arm64") {
+		t.Errorf("expected darwinArm64 to FAIL for linux/arm64")
+	}
+
+	// 3. Darwin Fat/Universal binary
+	if !ValidateBinaryArchitecture(darwinFat, "darwin", "amd64") {
+		t.Errorf("expected darwinFat to be valid for darwin/amd64")
+	}
+	if !ValidateBinaryArchitecture(darwinFat, "darwin", "arm64") {
+		t.Errorf("expected darwinFat to be valid for darwin/arm64")
+	}
+	if ValidateBinaryArchitecture(darwinFat, "linux", "amd64") {
+		t.Errorf("expected darwinFat to FAIL for linux/amd64")
+	}
+}

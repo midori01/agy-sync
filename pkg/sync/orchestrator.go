@@ -108,7 +108,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 1. Pipeline Handshake
 	stepStatus("Pipeline handshake")
-	handshakeCmd := fmt.Sprintf("%s echo READY && echo \"HOME:$HOME\" && echo \"USER:$(whoami 2>/dev/null || echo \"$USER\")\" && echo \"ARCH:$(uname -m 2>/dev/null || echo unknown)\" && echo \"COMMIT:$(command -v agy-sync >/dev/null 2>&1 && agy-sync --commit 2>/dev/null || echo NONE)\" && echo \"TS_IP:$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null || true)\" && echo \"LAN_IPS:$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/ {print $4}' | cut -d/ -f1) | tr '\\n' ',')\" && (date +%%s.%%N 2>/dev/null || date +%%s)", config.PathPrefix)
+	handshakeCmd := fmt.Sprintf("%s echo READY && echo \"HOME:$HOME\" && echo \"USER:$(whoami 2>/dev/null || echo \"$USER\")\" && echo \"OS:$(uname -s 2>/dev/null || echo Linux)\" && echo \"ARCH:$(uname -m 2>/dev/null || echo unknown)\" && echo \"COMMIT:$(command -v agy-sync >/dev/null 2>&1 && agy-sync --commit 2>/dev/null || echo NONE)\" && echo \"TS_IP:$(command -v tailscale >/dev/null 2>&1 && tailscale ip -4 2>/dev/null || true)\" && echo \"LAN_IPS:$((ifconfig 2>/dev/null | awk '/^[a-zA-Z0-9]/ {iface=$1} /inet (addr:)?/ {if (iface ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/) print $2}' | sed 's/addr://'; ip -o -4 addr show 2>/dev/null | awk '$2 ~ /^(wlan|eth|en|ra|br|swlan|usb|rndis|wg)/ {print $4}' | cut -d/ -f1) | tr '\\n' ',')\" && (date +%%s.%%N 2>/dev/null || date +%%s)", config.PathPrefix)
 
 	isLanDirect := (routeTier == "LAN Direct")
 	connectTo := 8
@@ -221,6 +221,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	remHome := config.HomeDir
 	remUser := ""
+	remOS := "linux"
 	remArch := "aarch64"
 	remCommit := ""
 	remTsIP := ""
@@ -236,6 +237,13 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 			}
 		} else if strings.HasPrefix(line, "USER:") {
 			remUser = strings.TrimSpace(strings.TrimPrefix(line, "USER:"))
+		} else if strings.HasPrefix(line, "OS:") {
+			o := strings.ToLower(strings.TrimSpace(strings.TrimPrefix(line, "OS:")))
+			if strings.Contains(o, "darwin") {
+				remOS = "darwin"
+			} else {
+				remOS = "linux"
+			}
 		} else if strings.HasPrefix(line, "ARCH:") {
 			remArch = strings.TrimSpace(strings.TrimPrefix(line, "ARCH:"))
 		} else if strings.HasPrefix(line, "COMMIT:") {
@@ -394,7 +402,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 3.5 Sync Engine (uses goSrcStat to safely determine binary build/push/rebuild)
 	stepStatus("Synchronizer engine")
-	binStat := SyncEngine(host, port, remHome, remArch, remCommit, goSrcStat, clockSkew, probeCache, isForce, tracker)
+	binStat := SyncEngine(host, port, remHome, remArch, remCommit, goSrcStat, clockSkew, probeCache, isForce, remOS, tracker)
 	recordAsset("Synchronizer Engine", binStat, "⚡", binStat == "pushed" || binStat == "pulled" || strings.Contains(binStat, "rebuilt") || strings.Contains(binStat, "compiled"))
 	if strings.Contains(binStat, "rebuilt") || strings.Contains(binStat, "pulled") {
 		pulledNewVersion = true

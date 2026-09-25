@@ -405,17 +405,17 @@ cat ~/.ssh/id_ed25519.pub
 	}
 
 	// 7. Deploy agy-sync Synchronizer Engine
-	targetBinaryData, err := GetOrBuildTargetBinary(arch)
+	targetBinaryData, err := GetOrBuildTargetBinary(osName, arch)
 	if err != nil || len(targetBinaryData) == 0 {
 		// Remote architecture binary could not be built/found locally.
 		// Check if remote target has 'go' compiler to build from source directly!
 		remCheckGo := `command -v go 2>/dev/null || echo NONE`
 		stdout, _, _, _ := ssh.RunSSHCmd(sshTarget, port, remCheckGo, false)
 		if strings.TrimSpace(stdout) != "NONE" && strings.TrimSpace(stdout) != "" {
-			fmt.Printf("[💡] Local host lacks Go cross-compiler for %s, but remote target has Go installed. Will build on target.\n", arch)
+			fmt.Printf("[💡] Local host lacks Go cross-compiler for %s/%s, but remote target has Go installed. Will build on target.\n", osName, arch)
 		} else {
 			platformName, installGoCmd := GetGoInstallAdvice()
-			fmt.Printf("[⚠️] Warning: Cannot provide pre-compiled binary for remote architecture '%s' (host is %s, companion binary missing, and Go compiler not installed).\n", arch, runtime.GOARCH)
+			fmt.Printf("[⚠️] Warning: Cannot provide pre-compiled binary for remote architecture '%s/%s' (host is %s/%s, companion binary missing, and Go compiler not installed).\n", osName, arch, runtime.GOOS, runtime.GOARCH)
 			fmt.Printf("    👉 Tip: Install Go on this device (%s: '%s') or on the target device.\n", platformName, installGoCmd)
 		}
 	} else {
@@ -832,14 +832,18 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 
 	mux.HandleFunc("/bin/agy-sync", func(w http.ResponseWriter, r *http.Request) {
 		qArch := strings.ToLower(r.URL.Query().Get("arch"))
-		binData, err := GetOrBuildTargetBinary(qArch)
+		qOS := strings.ToLower(r.URL.Query().Get("os"))
+		if qOS == "" {
+			qOS = "linux"
+		}
+		binData, err := GetOrBuildTargetBinary(qOS, qArch)
 		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
-		if err != nil || len(binData) == 0 || !ValidateELFArchitecture(binData, qArch) {
-			fmt.Printf("[⚠️] Client %s requested arch '%s', but no matching binary or Go compiler is available.\n", clientIP, qArch)
-			http.Error(w, fmt.Sprintf("Binary for architecture '%s' unavailable on peer", qArch), http.StatusNotFound)
+		if err != nil || len(binData) == 0 || !ValidateBinaryArchitecture(binData, qOS, qArch) {
+			fmt.Printf("[⚠️] Client %s requested %s/%s, but no matching binary or Go compiler is available.\n", clientIP, qOS, qArch)
+			http.Error(w, fmt.Sprintf("Binary for architecture '%s/%s' unavailable on peer", qOS, qArch), http.StatusNotFound)
 			return
 		}
-		fmt.Printf("[⚡] Streaming agy-sync engine binary (%s, %s) to %s...\n", qArch, terminal.FormatBytes(int64(len(binData))), clientIP)
+		fmt.Printf("[⚡] Streaming agy-sync engine binary (%s/%s, %s) to %s...\n", qOS, qArch, terminal.FormatBytes(int64(len(binData))), clientIP)
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.Itoa(len(binData)))
 		_, _ = w.Write(binData)
