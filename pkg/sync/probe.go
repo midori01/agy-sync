@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"agy-sync/pkg/config"
@@ -25,7 +26,32 @@ type RemoteFileInfo struct {
 	BodySHA string
 }
 
+var (
+	localHashMu    sync.RWMutex
+	localHashCache = make(map[string]localHashEntry)
+)
+
+type localHashEntry struct {
+	mtime int64
+	size  int64
+	hash  string
+}
+
 func GetFileHash(path string) string {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	mtime := fi.ModTime().Unix()
+	size := fi.Size()
+
+	localHashMu.RLock()
+	if c, ok := localHashCache[path]; ok && c.mtime == mtime && c.size == size {
+		localHashMu.RUnlock()
+		return c.hash
+	}
+	localHashMu.RUnlock()
+
 	f, err := os.Open(path)
 	if err != nil {
 		return ""
@@ -43,7 +69,13 @@ func GetFileHash(path string) string {
 			break
 		}
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	res := hex.EncodeToString(h.Sum(nil))
+
+	localHashMu.Lock()
+	localHashCache[path] = localHashEntry{mtime: mtime, size: size, hash: res}
+	localHashMu.Unlock()
+
+	return res
 }
 
 func GetScriptBodyAndHash(content []byte) ([]byte, string) {

@@ -54,6 +54,8 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	stepStatus := func(msg string) {
 		if activeSpinner != nil {
 			activeSpinner.SetStatus(msg)
+		} else if verbose {
+			fmt.Printf("    [⏱️ +%.2fs] %s...\n", time.Since(t0).Seconds(), msg)
 		}
 	}
 
@@ -301,7 +303,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	batchTargets := []string{
 		config.ToRemotePath(config.RulesFile, remHome),
 		config.ToRemotePath(config.HandoffFile, remHome),
-		config.ToRemotePath(config.AgySyncScript, remHome),
+		config.ToRemotePath(config.SummariesDBFile, remHome),
 		config.ToRemotePath(config.DevicesJSONFile, remHome),
 		config.ToRemotePath(config.AuthKeysFile, remHome),
 		config.ToRemotePath(config.OAuthTokenFile, remHome),
@@ -431,7 +433,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 5. Sync Conversation Summaries
 	stepStatus("Conversation index")
-	sumsStat := SyncConversationSummaries(host, port, clockSkew, remHome, tracker)
+	sumsStat := SyncConversationSummaries(host, port, clockSkew, remHome, probeCache, tracker)
 	recordAsset("Conversation Index", sumsStat, "📑", strings.Contains(sumsStat, "pushed") || strings.Contains(sumsStat, "pulled") || strings.Contains(sumsStat, "merged"))
 
 	// 6. Sync Conversation Databases
