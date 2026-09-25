@@ -223,10 +223,14 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 		if termW < 60 {
 			colWidths = []int{6, 9, 5, 7, 4, 4, 4} // ~53 cols
 		} else {
-			colWidths = []int{7, 10, 5, 8, 5, 5, 4} // ~62 cols
+			colWidths = []int{7, 9, 5, 9, 5, 5, 4} // ~62 cols
 		}
 	} else if termW >= 74 {
-		colWidths = []int{7, 9, 5, 8, 5, 5, 6, 4} // exactly 74 cols
+		nodeW := 7
+		if termW == 74 {
+			nodeW = 6
+		}
+		colWidths = []int{nodeW, 9, 5, 9, 5, 5, 6, 4} // 74 or 75 cols
 		headers = []string{"Node", "Route", "Ping", "Result", "DBs", "Arts", "Data", "Time"}
 		hasDataCol = true
 	}

@@ -21,6 +21,11 @@ func TestStrWidth(t *testing.T) {
 		{"📑", 2},
 		{"🔖", 2},
 		{"🧰", 2},
+		{"❌", 2},
+		{"🟡", 2},
+		{"🟢 Synced", 9},
+		{"❌ Failed", 9},
+		{"🟡 Diverg", 9},
 		{"你好世界", 8},
 		{"Route: Tailnet Mesh (120ms)", 27},
 	}

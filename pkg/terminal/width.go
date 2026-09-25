@@ -17,7 +17,7 @@ var wideEmojis = map[rune]bool{
 	'📜': true, '🧠': true, '👥': true, '📝': true, '📊': true, '✨': true,
 	'🎉': true, 'ℹ': true, '🚀': true, '🔑': true, '🪪': true, '🏊': true,
 	'🐹': true, '🔒': true, '🔧': true, '🎫': true, '📑': true, '🔖': true,
-	'🧰': true,
+	'🧰': true, '❌': true, '🟡': true,
 }
 
 // SanitizeText replaces tabs and newlines with spaces and strips control chars.
