@@ -286,9 +286,13 @@ func ResolveFastestEndpoint(host string, port int, peerName string) (effectiveHo
 			peerData = d
 			break
 		}
-		if peerName != "" && strings.EqualFold(d.NativeName, peerName) {
-			peerData = d
-			break
+		if peerData == nil {
+			for _, lip := range d.LanIps {
+				if lip == lookupHost {
+					peerData = d
+					break
+				}
+			}
 		}
 	}
 
@@ -302,14 +306,38 @@ func ResolveFastestEndpoint(host string, port int, peerName string) (effectiveHo
 		defRetHost = fmt.Sprintf("%s@%s", effectiveUser, host)
 	}
 
+	// Resolve target Tailnet IP early for all fallback branches
+	targetTsIP := ""
+	if peerData != nil && peerData.TailscaleIP != "" {
+		targetTsIP = peerData.TailscaleIP
+	} else if strings.HasPrefix(lookupHost, "100.") {
+		targetTsIP = lookupHost
+	}
+
 	if lookupHost == "127.0.0.1" || lookupHost == "localhost" || lookupHost == "::1" || lookupHost == "0.0.0.0" {
 		return defRetHost, port, "Local Loopback", 0.0
 	}
 
-	// 2. Check local network context: If local device has no Wi-Fi/Ethernet, skip LAN probe immediately (0ms cost)
+	// 2. Check local network context: If local device has no Wi-Fi/Ethernet (e.g. mobile 5G data),
+	// immediately fallback to Tailnet Mesh routing using peer's Tailscale IP
 	localNets := GetLocalLanNetworks()
 	if len(localNets) == 0 {
-		return defRetHost, port, "Tailnet Mesh", 0.0
+		if targetTsIP != "" {
+			ok, lat, _ := ProbeSSHBanner(targetTsIP, port, 600*time.Millisecond)
+			effH := targetTsIP
+			if effectiveUser != "" {
+				effH = fmt.Sprintf("%s@%s", effectiveUser, targetTsIP)
+			}
+			if ok {
+				return effH, port, "Tailnet Mesh", lat
+			}
+			return effH, port, "Tailnet Mesh", 0.0
+		}
+		tier := "Direct IP"
+		if strings.HasPrefix(lookupHost, "100.") {
+			tier = "Tailnet Mesh"
+		}
+		return defRetHost, port, tier, 0.0
 	}
 
 	// 3. Gather candidate LAN IPs
@@ -331,7 +359,22 @@ func ResolveFastestEndpoint(host string, port int, peerName string) (effectiveHo
 	}
 
 	if len(candidates) == 0 {
-		return defRetHost, port, "Tailnet Mesh", 0.0
+		if targetTsIP != "" {
+			ok, lat, _ := ProbeSSHBanner(targetTsIP, port, 600*time.Millisecond)
+			effH := targetTsIP
+			if effectiveUser != "" {
+				effH = fmt.Sprintf("%s@%s", effectiveUser, targetTsIP)
+			}
+			if ok {
+				return effH, port, "Tailnet Mesh", lat
+			}
+			return effH, port, "Tailnet Mesh", 0.0
+		}
+		tier := "Direct IP"
+		if strings.HasPrefix(lookupHost, "100.") {
+			tier = "Tailnet Mesh"
+		}
+		return defRetHost, port, tier, 0.0
 	}
 
 	// 4. Filter candidates by subnet overlap with local Wi-Fi/Ethernet interfaces
@@ -349,23 +392,17 @@ func ResolveFastestEndpoint(host string, port int, peerName string) (effectiveHo
 		}
 	}
 
-	targetTsIP := ""
-	if peerData != nil && peerData.TailscaleIP != "" {
-		targetTsIP = peerData.TailscaleIP
-	} else if strings.HasPrefix(lookupHost, "100.") {
-		targetTsIP = lookupHost
-	}
-
 	if len(subnetCandidates) == 0 {
 		if targetTsIP != "" {
 			ok, lat, _ := ProbeSSHBanner(targetTsIP, port, 600*time.Millisecond)
+			effH := targetTsIP
+			if effectiveUser != "" {
+				effH = fmt.Sprintf("%s@%s", effectiveUser, targetTsIP)
+			}
 			if ok {
-				effH := targetTsIP
-				if effectiveUser != "" {
-					effH = fmt.Sprintf("%s@%s", effectiveUser, targetTsIP)
-				}
 				return effH, port, "Tailnet Mesh", lat
 			}
+			return effH, port, "Tailnet Mesh", 0.0
 		}
 		tier := "Direct IP"
 		if strings.HasPrefix(lookupHost, "100.") {

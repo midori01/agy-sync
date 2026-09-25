@@ -104,10 +104,19 @@ func RunInstall() error {
 	}
 
 	// 3. Ensure PATH Environment is Configured
-	if !isTermux {
-		pathEnv := os.Getenv("PATH")
+	pathEnv := os.Getenv("PATH")
+	if isTermux {
+		if !strings.Contains(pathEnv, canonicalDir) {
+			rcFile := filepath.Join(config.HomeDir, ".bashrc")
+			exportLine := fmt.Sprintf("\nexport PATH=\"%s:$PATH\"\n", canonicalDir)
+			if f, err := os.OpenFile(rcFile, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644); err == nil {
+				_, _ = f.WriteString(exportLine)
+				_ = f.Close()
+			}
+		}
+	} else {
 		localBinDir := filepath.Join(config.HomeDir, ".local", "bin")
-		if !strings.Contains(pathEnv, localBinDir) && !strings.Contains(pathEnv, filepath.Dir(canonicalBin)) {
+		if !strings.Contains(pathEnv, localBinDir) && !strings.Contains(pathEnv, canonicalDir) {
 			// Append to ~/.bashrc or ~/.zshrc
 			rcFile := filepath.Join(config.HomeDir, ".bashrc")
 			if shell := os.Getenv("SHELL"); strings.Contains(shell, "zsh") {

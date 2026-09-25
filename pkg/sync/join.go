@@ -153,8 +153,8 @@ Examples:
 	// 5. Check if peer address is Tailscale IP (100.x.y.z) and record it
 	if strings.HasPrefix(host, "100.") {
 		reg := config.LoadRegistry()
-		for _, d := range reg {
-			if !d.Deleted && (strings.Contains(d.Alias, host) || d.TailscaleIP == host) {
+		for ep, d := range reg {
+			if !d.Deleted && (strings.Contains(ep, host) || strings.Contains(d.Alias, host) || d.TailscaleIP == host) {
 				d.TailscaleIP = host
 				_ = config.SaveRegistry(reg)
 				break
@@ -205,8 +205,11 @@ Examples:
 		if tHost == "" {
 			tHost = defAlias
 		}
-		if tHost != "" {
-			SyncWithPeer(tHost, defPort, defAlias, false, false, nil, nil)
+		if tHost == "" {
+			tHost = host
+			defPort = port
+			defAlias = host
 		}
+		SyncWithPeer(tHost, defPort, defAlias, false, false, nil, nil)
 	}
 }

@@ -72,6 +72,9 @@ func RunSmartWizard() {
 		_ = config.SeedRegistryFromConfig()
 		cluster.ReconcileRegistry()
 
+		// 5. Ensure SSH daemon is active
+		_, _, _ = CheckSSH()
+
 		fmt.Println("\n[🎉] Primary device initialized successfully!")
 		fmt.Println("    • Canonical directory : ~/.gemini/antigravity-cli/bin/agy-sync")
 		fmt.Println("    • Identity key        : ~/.ssh/id_ed25519.pub")

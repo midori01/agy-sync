@@ -286,12 +286,21 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 					regUpdated = true
 				}
 			}
-			// Automatically capture and persist remote Tailscale IP (if detected or contacted over Tailnet)
-			if remTsIP != "" && strings.HasPrefix(remTsIP, "100.") && d.TailscaleIP != remTsIP {
-				d.TailscaleIP = remTsIP
+			// Automatically capture and persist remote Tailscale IP (pure IP address without user@ prefix)
+			cleanOrigHost := origHost
+			if idx := strings.Index(cleanOrigHost, "@"); idx != -1 {
+				cleanOrigHost = cleanOrigHost[idx+1:]
+			}
+			cleanRemTsIP := remTsIP
+			if idx := strings.Index(cleanRemTsIP, "@"); idx != -1 {
+				cleanRemTsIP = cleanRemTsIP[idx+1:]
+			}
+
+			if cleanRemTsIP != "" && strings.HasPrefix(cleanRemTsIP, "100.") && d.TailscaleIP != cleanRemTsIP {
+				d.TailscaleIP = cleanRemTsIP
 				regUpdated = true
-			} else if strings.HasPrefix(origHost, "100.") && d.TailscaleIP != origHost {
-				d.TailscaleIP = origHost
+			} else if strings.HasPrefix(cleanOrigHost, "100.") && d.TailscaleIP != cleanOrigHost {
+				d.TailscaleIP = cleanOrigHost
 				regUpdated = true
 			}
 			if regUpdated {
