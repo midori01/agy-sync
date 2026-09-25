@@ -86,6 +86,9 @@ func SyncSingleFile(localPath, remotePath, host string, port int, name string, c
 	if localExists && fi.Size() == 0 && remoteExists && remoteSize > 0 {
 		// Remote has data while local is empty: force pull to prevent data loss
 		normalizedRemoteMTime = localMTime + 9999
+	} else if localExists && fi.Size() > 0 && remoteExists && remoteSize == 0 {
+		// Local has data while remote is empty: force push to prevent data loss
+		normalizedRemoteMTime = localMTime - 9999
 	}
 
 	if localExists && (!remoteExists || localMTime >= normalizedRemoteMTime) {

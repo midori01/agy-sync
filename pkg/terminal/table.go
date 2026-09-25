@@ -70,6 +70,13 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 	if len(totalW) > 0 && totalW[0] > 0 {
 		totW = totalW[0]
 	}
+	termW := GetTerminalWidth()
+	if termW > 0 && totW > termW {
+		totW = termW
+	}
+	if totW < 36 {
+		totW = 36
+	}
 	innerW := totW - 4
 
 	peerName := res.PeerName
@@ -77,6 +84,9 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 		peerName = "peer"
 	}
 	title := fmt.Sprintf("[Sync Dashboard · %s]", peerName)
+	if StrWidth(title) > totW-8 {
+		title = TruncateWidth(title, totW-8)
+	}
 	barLen := totW - 5 - StrWidth(title)
 	if barLen < 2 {
 		barLen = 2
@@ -178,14 +188,26 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 	colWidths := []int{8, 13, 6, 9, 6, 6, 4}
 	headers := []string{"Node", "Route", "Ping", "Result", "DBs", "Arts", "Time"}
 
+	termW := GetTerminalWidth()
+	if termW > 0 && termW < 74 {
+		if termW < 60 {
+			colWidths = []int{6, 9, 5, 7, 4, 4, 4} // ~53 cols
+		} else {
+			colWidths = []int{7, 10, 5, 8, 5, 5, 4} // ~62 cols
+		}
+	}
+
 	totW := 0
 	for _, w := range colWidths {
 		totW += w
 	}
-	totW += len(colWidths)*2 + (len(colWidths) + 1) // 74
+	totW += len(colWidths)*2 + (len(colWidths) + 1)
 	innerW := totW - 4
 
 	title := "[Cluster Sync Dashboard]"
+	if StrWidth(title) > totW-8 {
+		title = TruncateWidth(title, totW-8)
+	}
 	barLen := totW - 5 - StrWidth(title)
 	if barLen < 2 {
 		barLen = 2

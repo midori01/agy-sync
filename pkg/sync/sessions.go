@@ -86,7 +86,7 @@ remote_snap_cmd = (
     f"os.unlink(tmp.name)\" 2>/dev/null || cat '{rem_db}' 2>/dev/null"
 )
 
-ssh_cmd = ["ssh", "-p", "%d", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ControlMaster=auto", "-o", "ControlPath=%s/cm-%%C", "-o", "ControlPersist=60s", "%s", remote_snap_cmd]
+ssh_cmd = ["ssh", "-p", "%d", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR", "-o", "ControlMaster=auto", "-o", "ControlPath=%s/cm-%%C", "-o", "ControlPersist=60s", "%s", remote_snap_cmd]
 
 with open(tmp_remote.name, "wb") as f_out:
     subprocess.run(ssh_cmd, stdout=f_out)
@@ -270,6 +270,10 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 				toPush = append(toPush, k)
 			} else if rem[1] > loc[1] {
 				toPull = append(toPull, k)
+			} else if loc[0] > rem[0]+5 {
+				toPush = append(toPush, k)
+			} else if rem[0] > loc[0]+5 {
+				toPull = append(toPull, k)
 			}
 		}
 	}
@@ -356,6 +360,10 @@ shutil.rmtree(td, ignore_errors=True)
 		p2 := exec.Command("tar", "-C", config.ConvDir, "--no-same-owner", "-xzf", "-")
 		if err := RunPipedCommands(p1, p2); err == nil {
 			pulledCount = len(toPull)
+			for _, d := range toPull {
+				_ = os.Remove(filepath.Join(config.ConvDir, d+"-wal"))
+				_ = os.Remove(filepath.Join(config.ConvDir, d+"-shm"))
+			}
 		} else {
 			// Fallback: direct tar stream if remote lacks python3
 			inputList := strings.Join(toPull, "\n") + "\n"
@@ -365,6 +373,10 @@ shutil.rmtree(td, ignore_errors=True)
 			fb2 := exec.Command("tar", "-C", config.ConvDir, "--no-same-owner", "-xzf", "-")
 			if err := RunPipedCommands(fb1, fb2); err == nil {
 				pulledCount = len(toPull)
+				for _, d := range toPull {
+					_ = os.Remove(filepath.Join(config.ConvDir, d+"-wal"))
+					_ = os.Remove(filepath.Join(config.ConvDir, d+"-shm"))
+				}
 			}
 		}
 	}

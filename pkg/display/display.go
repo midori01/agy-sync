@@ -406,16 +406,27 @@ func ShowDevices(verbose bool) {
 		ssh.ReconcileSSHConfig(registry)
 	}
 
-	// 74-col Bento Matrix Table
+	// Bento Matrix Table
 	colWidths := []int{10, 7, 13, 6, 9, 10}
+	termW := terminal.GetTerminalWidth()
+	if termW > 0 && termW < 74 {
+		if termW < 60 {
+			colWidths = []int{8, 5, 9, 5, 7, 8} // ~57 cols
+		} else {
+			colWidths = []int{9, 6, 11, 5, 8, 9} // ~65 cols
+		}
+	}
 	totW := 0
 	for _, w := range colWidths {
 		totW += w
 	}
-	totW += len(colWidths)*2 + (len(colWidths) + 1) // 74
+	totW += len(colWidths)*2 + (len(colWidths) + 1)
 	innerW := totW - 4
 
 	title := fmt.Sprintf("Cluster Devices · %d Nodes", len(activeDevices))
+	if terminal.StrWidth("["+title+"]") > totW-8 {
+		title = terminal.TruncateWidth(title, totW-10)
+	}
 	barLen := totW - 5 - terminal.StrWidth("["+title+"]")
 	if barLen < 2 {
 		barLen = 2
@@ -518,14 +529,25 @@ func ShowItems(verbose ...bool) {
 	}...)
 
 	colWidths := []int{24, 27, 13}
+	termW := terminal.GetTerminalWidth()
+	if termW > 0 && termW < 74 {
+		if termW < 60 {
+			colWidths = []int{18, 19, 10} // ~54 cols
+		} else {
+			colWidths = []int{21, 23, 11} // ~62 cols
+		}
+	}
 	totW := 0
 	for _, w := range colWidths {
 		totW += w
 	}
-	totW += len(colWidths)*2 + (len(colWidths) + 1) // 74
+	totW += len(colWidths)*2 + (len(colWidths) + 1)
 	innerW := totW - 4
 
 	title := fmt.Sprintf("Synchronized Assets Manifest · %d Groups", len(items))
+	if terminal.StrWidth("["+title+"]") > totW-8 {
+		title = terminal.TruncateWidth(title, totW-10)
+	}
 	barLen := totW - 5 - terminal.StrWidth("["+title+"]")
 	if barLen < 2 {
 		barLen = 2

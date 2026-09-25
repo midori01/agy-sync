@@ -123,6 +123,8 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 			if verbose {
 				fmt.Printf("[🔄] LAN direct test unconfirmed, falling back to Tailnet Mesh %s:%d...\n", origHost, origPort)
 			}
+			ssh.CloseControlMaster(host, port)
+			ssh.CloseControlMaster(origHost, origPort)
 			fallbackHost := origHost
 			if strings.Contains(host, "@") && !strings.Contains(fallbackHost, "@") {
 				parts := strings.SplitN(host, "@", 2)

@@ -81,6 +81,7 @@ func main() {
 	go func() {
 		<-sigChan
 		fmt.Print("\r\033[K\033[?25h")
+		ssh.KillAllControlMasters()
 		os.Exit(130)
 	}()
 	defer fmt.Print("\033[?25h")

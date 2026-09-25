@@ -231,17 +231,16 @@ func ProbeSSHBanner(ip string, port int, timeout time.Duration) (bool, float64, 
 	totalLat := float64(time.Since(t0).Microseconds()) / 1000.0
 
 	if err == nil && n > 0 {
-		banner := strings.TrimSpace(string(buf[:n]))
-		banner = strings.ReplaceAll(banner, "\r", "")
-		if idx := strings.IndexByte(banner, '\n'); idx >= 0 {
-			banner = strings.TrimSpace(banner[:idx])
-		}
-		if strings.HasPrefix(banner, "SSH-") {
-			effLat := tcpLat
-			if tcpLat < 10.0 && totalLat >= 10.0 {
-				effLat = totalLat
+		rawStr := strings.ReplaceAll(string(buf[:n]), "\r", "")
+		for _, line := range strings.Split(rawStr, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "SSH-") {
+				effLat := tcpLat
+				if tcpLat < 10.0 && totalLat >= 10.0 {
+					effLat = totalLat
+				}
+				return true, effLat, line
 			}
-			return true, effLat, banner
 		}
 	}
 

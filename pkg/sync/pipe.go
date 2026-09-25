@@ -27,12 +27,45 @@ func RunPipedCommands(producer *exec.Cmd, consumer *exec.Cmd) error {
 		return err
 	}
 
-	consumerErr := consumer.Wait()
-	_ = pipe.Close()
-	if consumerErr != nil && producer.Process != nil {
-		_ = producer.Process.Kill()
+	prodChan := make(chan error, 1)
+	consChan := make(chan error, 1)
+
+	go func() {
+		prodChan <- producer.Wait()
+	}()
+	go func() {
+		consChan <- consumer.Wait()
+	}()
+
+	var producerErr, consumerErr error
+	prodDone := false
+	consDone := false
+
+	for !prodDone || !consDone {
+		select {
+		case err := <-prodChan:
+			producerErr = err
+			prodDone = true
+			if err != nil {
+				// Producer failed or terminated: terminate consumer to prevent hanging on pipe
+				_ = pipe.Close()
+				if consumer.Process != nil {
+					_ = consumer.Process.Kill()
+				}
+			}
+		case err := <-consChan:
+			consumerErr = err
+			consDone = true
+			if err != nil {
+				// Consumer failed: terminate producer to prevent hanging on writing to full pipe
+				_ = pipe.Close()
+				if producer.Process != nil {
+					_ = producer.Process.Kill()
+				}
+			}
+		}
 	}
-	producerErr := producer.Wait()
+	_ = pipe.Close()
 
 	if consumerErr != nil && producerErr != nil {
 		return fmt.Errorf("consumer: %v; producer: %v", consumerErr, producerErr)

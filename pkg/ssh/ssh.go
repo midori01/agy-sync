@@ -135,6 +135,37 @@ func CleanupStaleControlSockets() {
 	wg.Wait()
 }
 
+// CloseControlMaster safely requests OpenSSH to terminate the multiplexer connection for a target.
+func CloseControlMaster(host string, port int) {
+	sshArgs := []string{
+		"-p", strconv.Itoa(port),
+		"-o", fmt.Sprintf("ControlPath=%s/cm-%%C", config.SocketDir),
+		"-O", "exit",
+		host,
+	}
+	cmd := exec.Command("ssh", sshArgs...)
+	_ = cmd.Run()
+}
+
+// KillAllControlMasters cleanly exits and purges all ControlMaster sockets in SocketDir.
+func KillAllControlMasters() {
+	if fi, err := os.Stat(config.SocketDir); err != nil || !fi.IsDir() {
+		return
+	}
+	entries, err := os.ReadDir(config.SocketDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "cm-") {
+			sockPath := filepath.Join(config.SocketDir, e.Name())
+			cmd := exec.Command("ssh", "-o", fmt.Sprintf("ControlPath=%s", sockPath), "-O", "exit", "dummy")
+			_ = cmd.Run()
+			_ = os.Remove(sockPath)
+		}
+	}
+}
+
 func ReconcileSSHConfig(reg ...config.Registry) {
 	var registry config.Registry
 	if len(reg) > 0 && reg[0] != nil {
