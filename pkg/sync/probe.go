@@ -260,16 +260,17 @@ func BatchProbeDirectoryInventories(host string, port int, remHome string) *Remo
 
 	batchScript := fmt.Sprintf(
 		"mkdir -p '%s' '%s' '%s' '%s' 2>/dev/null && ("+
-			"echo '===CONV_START==='; stat -c '%%n %%Y %%s' '%s'/*.db 2>/dev/null; "+
-			"echo '===ANN_START==='; stat -c '%%n %%Y' '%s'/*.pbtxt 2>/dev/null; "+
-			"echo '===BRAIN_START==='; (stat -c '%%n\t%%Y\t%%s' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -c '%%n\t%%Y\t0' '%s'/*/ 2>/dev/null); "+
-			"echo '===CFG_START==='; find '%s' -type f -exec stat -c '%%n\t%%Y\t%%s' {} + 2>/dev/null; "+
+			"if stat -c '%%n' /dev/null >/dev/null 2>&1; then IS_GNU=1; else IS_GNU=0; fi; "+
+			"echo '===CONV_START==='; if [ \"$IS_GNU\" -eq 1 ]; then stat -c '%%n %%Y %%s' '%s'/*.db; else stat -f '%%N %%m %%z' '%s'/*.db; fi 2>/dev/null; "+
+			"echo '===ANN_START==='; if [ \"$IS_GNU\" -eq 1 ]; then stat -c '%%n %%Y' '%s'/*.pbtxt; else stat -f '%%N %%m' '%s'/*.pbtxt; fi 2>/dev/null; "+
+			"echo '===BRAIN_START==='; if [ \"$IS_GNU\" -eq 1 ]; then (stat -c '%%n\t%%Y\t%%s' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -c '%%n\t%%Y\t0' '%s'/*/ 2>/dev/null); else (stat -f '%%N\t%%m\t%%z' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -f '%%N\t%%m\t0' '%s'/*/ 2>/dev/null); fi; "+
+			"echo '===CFG_START==='; if [ \"$IS_GNU\" -eq 1 ]; then find '%s' -type f -exec stat -c '%%n\t%%Y\t%%s' {} + 2>/dev/null; else find '%s' -type f -exec stat -f '%%N\t%%m\t%%z' {} + 2>/dev/null; fi; "+
 			"echo '===INV_END===')",
 		remConv, remAnn, remBrain, remCfg,
-		remConv,
-		remAnn,
-		remBrain, remBrain,
-		remCfg,
+		remConv, remConv,
+		remAnn, remAnn,
+		remBrain, remBrain, remBrain, remBrain,
+		remCfg, remCfg,
 	)
 
 	stdout, _, _, err := ssh.RunSSHCmd(host, port, batchScript, false)

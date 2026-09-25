@@ -53,7 +53,7 @@ func SyncSingleFile(localPath, remotePath, host string, port int, name string, c
 	} else if probeCache != nil && probeCache[remotePath] == nil {
 		remoteExists = false
 	} else {
-		probeCmd := fmt.Sprintf(`f="%s"; if test -f "$f"; then echo "$(stat -c "%%Y %%s" "$f") $(sha256sum "$f" | awk '{print $1}')"; else echo "NONE"; fi`, remotePath)
+		probeCmd := fmt.Sprintf(`f="%s"; if test -f "$f"; then if stat -c "%%Y %%s" "$f" >/dev/null 2>&1; then st="$(stat -c "%%Y %%s" "$f")"; else st="$(stat -f "%%m %%z" "$f" 2>/dev/null)"; fi; if command -v sha256sum >/dev/null 2>&1; then h="$(sha256sum "$f" | awk '{print $1}')"; else h="$(shasum -a 256 "$f" 2>/dev/null | awk '{print $1}')"; fi; echo "$st $h"; else echo "NONE"; fi`, remotePath)
 		stdout, _, _, _ := ssh.RunSSHCmd(host, port, probeCmd, false)
 		stdout = strings.TrimSpace(stdout)
 		if stdout != "NONE" && stdout != "" {
@@ -515,7 +515,7 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 	remoteFiles := preprobedCfg
 	if remoteFiles == nil {
 		remoteFiles = make(map[string][2]int64)
-		cmdStr := fmt.Sprintf("mkdir -p '%s' && find '%s' -type f -exec stat -c '%%n\t%%Y\t%%s' {} + 2>/dev/null", remCfg, remCfg)
+		cmdStr := fmt.Sprintf("mkdir -p '%s' && if stat -c '%%n' /dev/null >/dev/null 2>&1; then find '%s' -type f -exec stat -c '%%n\t%%Y\t%%s' {} + 2>/dev/null; else find '%s' -type f -exec stat -f '%%N\t%%m\t%%z' {} + 2>/dev/null; fi", remCfg, remCfg, remCfg)
 		stdout, _, _, _ := ssh.RunSSHCmd(host, port, cmdStr, false)
 
 		for _, line := range strings.Split(stdout, "\n") {

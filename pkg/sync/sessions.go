@@ -324,7 +324,7 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 	remoteDBs := preprobedDBs
 	if remoteDBs == nil {
 		remoteDBs = make(map[string][2]int64)
-		statCmd := fmt.Sprintf("mkdir -p '%s' && stat -c '%%n %%Y %%s' '%s'/*.db 2>/dev/null", remConv, remConv)
+		statCmd := fmt.Sprintf("mkdir -p '%s' && (if stat -c '%%n' /dev/null >/dev/null 2>&1; then stat -c '%%n %%Y %%s' '%s'/*.db; else stat -f '%%N %%m %%z' '%s'/*.db; fi) 2>/dev/null", remConv, remConv, remConv)
 		stdout, _, _, _ := ssh.RunSSHCmd(host, port, statCmd, false)
 
 		for _, line := range strings.Split(stdout, "\n") {
@@ -548,7 +548,7 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string, t
 	remoteAnns := preprobedAnns
 	if remoteAnns == nil {
 		remoteAnns = make(map[string]int64)
-		cmdStr := fmt.Sprintf("mkdir -p '%s' && stat -c '%%n %%Y' '%s'/*.pbtxt 2>/dev/null", remAnn, remAnn)
+		cmdStr := fmt.Sprintf("mkdir -p '%s' && (if stat -c '%%n' /dev/null >/dev/null 2>&1; then stat -c '%%n %%Y' '%s'/*.pbtxt; else stat -f '%%N %%m' '%s'/*.pbtxt; fi) 2>/dev/null", remAnn, remAnn, remAnn)
 		stdout, _, _, _ := ssh.RunSSHCmd(host, port, cmdStr, false)
 
 		for _, line := range strings.Split(stdout, "\n") {
@@ -697,8 +697,8 @@ func SyncBrainSessions(host string, port int, clockSkew float64, remHome string,
 	if remoteBrains == nil {
 		// Fast-path: Shell stat for all transcript files and session directories (15-40ms vs 2500ms in Python)
 		statCmd := fmt.Sprintf(
-			"mkdir -p '%s' && (stat -c '%%n\t%%Y\t%%s' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -c '%%n\t%%Y\t0' '%s'/*/ 2>/dev/null)",
-			remBrain, remBrain, remBrain,
+			"mkdir -p '%s' && if stat -c '%%n' /dev/null >/dev/null 2>&1; then (stat -c '%%n\t%%Y\t%%s' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -c '%%n\t%%Y\t0' '%s'/*/ 2>/dev/null); else (stat -f '%%N\t%%m\t%%z' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -f '%%N\t%%m\t0' '%s'/*/ 2>/dev/null); fi",
+			remBrain, remBrain, remBrain, remBrain, remBrain,
 		)
 		stdout, _, _, _ := ssh.RunSSHCmd(host, port, statCmd, false)
 		remoteBrains = make(map[string][2]int64)
