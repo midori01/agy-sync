@@ -1085,3 +1085,127 @@ Arguments:
 	elapsed := time.Since(t0).Seconds()
 	spinner.Stop(fmt.Sprintf("\033[32m✓\033[0m Force-pushed account pool (%d accounts) to %d/%d peers \033[90m(%.2fs)\033[0m", accountCount, successCount, len(peersToPush), elapsed))
 }
+
+func PushEngineToPeers(targetAlias string) {
+	if targetAlias == "-h" || targetAlias == "--help" {
+		fmt.Println(`
+Usage: agy-sync push-engine [alias]
+
+Aliases:
+  agy-sync push-pool-engine [alias]
+  agy-sync engine-push [alias]
+
+Arguments:
+  alias                 Optional specific peer alias (e.g. sjc1, galaxy, mac).
+                        If omitted, force-pushes local ~/agy-pool engine and installs to all remote peers in cluster.`)
+		return
+	}
+	ForcePushPoolEngine(targetAlias)
+}
+
+func ForcePushPoolEngine(targetAlias string) {
+	if fi, err := os.Stat(config.PoolDir); err != nil || !fi.IsDir() {
+		fmt.Println("[❌] No local ~/agy-pool found to push.")
+		return
+	}
+
+	localBin := filepath.Join(config.PoolDir, "bin", "agy-pool")
+	if _, err := os.Stat(localBin); err != nil {
+		fmt.Println("[❌] No local ~/agy-pool/bin/agy-pool executable found to push.")
+		return
+	}
+
+	devices := cluster.LoadDevices()
+	localEp := config.GetLocalEndpoint()
+	localName := config.GetLocalDeviceName()
+
+	type pushPeer struct {
+		Alias string
+		Host  string
+		Port  int
+	}
+	var peersToPush []pushPeer
+
+	if targetAlias != "" {
+		ep, matchedAlias := ssh.FindEndpoint(targetAlias)
+		if ep != "" {
+			if config.IsLocalEndpoint(ep, nil) {
+				fmt.Printf("[⚠️] Target '%s' is this local device.\n", targetAlias)
+				return
+			}
+			_, _, p, tSSH := config.ParseEndpoint(ep, 8022)
+			peersToPush = append(peersToPush, pushPeer{Alias: matchedAlias, Host: tSSH, Port: p})
+		} else if dev, ok := devices[targetAlias]; ok {
+			peersToPush = append(peersToPush, pushPeer{Alias: targetAlias, Host: dev.TargetSSH, Port: dev.Port})
+		} else {
+			fmt.Printf("[❌] Peer '%s' not found in cluster.\n", targetAlias)
+			return
+		}
+	} else {
+		for alias, dev := range devices {
+			if !config.IsLocalTarget(dev.TargetSSH, dev.Port, localEp, localName) {
+				peersToPush = append(peersToPush, pushPeer{Alias: alias, Host: dev.TargetSSH, Port: dev.Port})
+			}
+		}
+	}
+
+	if len(peersToPush) == 0 {
+		fmt.Println("[⚠️] No remote peers to push agy-pool engine to.")
+		return
+	}
+
+	fmt.Printf("[🏊] Force-pushing agy-pool engine to %d peer(s)...\n", len(peersToPush))
+	spinner := terminal.NewSpinner(fmt.Sprintf("Pushing agy-pool engine across %d peer(s)", len(peersToPush)), true)
+	spinner.Start()
+
+	t0 := time.Now()
+	successCount := 0
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, p := range peersToPush {
+		wg.Add(1)
+		go func(peer pushPeer) {
+			defer wg.Done()
+			effH, effP, _, _ := network.ResolveFastestEndpoint(peer.Host, peer.Port, peer.Alias)
+			stdout, _, _, err := ssh.RunSSHCmd(effH, effP, "echo \"HOME:$HOME\"", false)
+			if err != nil {
+				return
+			}
+			remHome := config.HomeDir
+			for _, line := range strings.Split(stdout, "\n") {
+				line = strings.TrimSpace(line)
+				if strings.HasPrefix(line, "HOME:") {
+					remHome = strings.TrimSpace(strings.TrimPrefix(line, "HOME:"))
+				}
+			}
+
+			p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=.git", "--exclude=__pycache__", "--exclude=*.pyc", "--exclude=.DS_Store", "-czf", "-", "agy-pool")
+			sshArgs := ssh.GetSSHCmd(effH, effP, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
+			p2 := exec.Command("ssh", sshArgs...)
+			_, err = RunPipedCommandsWithBytes(p1, p2)
+			if err == nil {
+				remPoolDir := fmt.Sprintf("%s/agy-pool", remHome)
+				postCmd := fmt.Sprintf(`export PATH="/data/data/com.termux/files/usr/bin:/usr/local/bin:$HOME/.local/bin:$HOME/bin:$PATH";
+chmod +x '%s/bin/agy-pool' '%s/bin/agy-raw' '%s/install.sh' 2>/dev/null || true;
+if [ -f '%s/install.sh' ]; then
+    bash '%s/install.sh' >/dev/null 2>&1 || true
+fi;
+if [ -x '%s/bin/agy-pool' ]; then
+    '%s/bin/agy-pool' restart >/dev/null 2>&1 || true
+elif command -v agy-pool >/dev/null 2>&1; then
+    agy-pool restart >/dev/null 2>&1 || true
+fi`, remPoolDir, remPoolDir, remPoolDir, remPoolDir, remPoolDir, remPoolDir, remPoolDir)
+				_, _, _, _ = ssh.RunSSHCmd(effH, effP, postCmd, false)
+
+				mu.Lock()
+				successCount++
+				mu.Unlock()
+			}
+		}(p)
+	}
+
+	wg.Wait()
+	elapsed := time.Since(t0).Seconds()
+	spinner.Stop(fmt.Sprintf("\033[32m✓\033[0m Force-pushed agy-pool engine to %d/%d peers \033[90m(%.2fs)\033[0m", successCount, len(peersToPush), elapsed))
+}

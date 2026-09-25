@@ -1108,7 +1108,7 @@ else:
 
 	// Push local to remote
 	if localHasPool {
-		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=.git", "-czf", "-", "agy-pool")
+		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=.git", "--exclude=__pycache__", "--exclude=*.pyc", "--exclude=.DS_Store", "-czf", "-", "agy-pool")
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		nBytes, err := RunPipedCommandsWithBytes(p1, p2)
@@ -1116,17 +1116,26 @@ else:
 			if len(tracker) > 0 && tracker[0] != nil {
 				tracker[0].AddPush(nBytes)
 			}
-			postCmd := fmt.Sprintf(`chmod +x '%s/bin/agy-pool' '%s/install.sh' 2>/dev/null || true;
+			postCmd := fmt.Sprintf(`export PATH="/data/data/com.termux/files/usr/bin:/usr/local/bin:$HOME/.local/bin:$HOME/bin:$PATH";
+chmod +x '%s/bin/agy-pool' '%s/bin/agy-raw' '%s/install.sh' 2>/dev/null || true;
+if [ -f '%s/install.sh' ]; then
+  bash '%s/install.sh' >/dev/null 2>&1 || true;
+fi;
 if [ -w /usr/local/bin ] || [ "$(id -u)" -eq 0 ]; then
   ln -sf '%s/bin/agy-pool' /usr/local/bin/agy-pool 2>/dev/null || true;
 elif [ -d /data/data/com.termux/files/usr/bin ]; then
   ln -sf '%s/bin/agy-pool' /data/data/com.termux/files/usr/bin/agy-pool 2>/dev/null || true;
-fi`, remPoolDir, remPoolDir, remPoolDir, remPoolDir)
+fi;
+if [ -x '%s/bin/agy-pool' ]; then
+  '%s/bin/agy-pool' restart >/dev/null 2>&1 || true;
+elif command -v agy-pool >/dev/null 2>&1; then
+  agy-pool restart >/dev/null 2>&1 || true;
+fi`, remPoolDir, remPoolDir, remPoolDir, remPoolDir, remPoolDir, remPoolDir, remPoolDir, remPoolDir, remPoolDir)
 			_, _, _, _ = ssh.RunSSHCmd(host, port, postCmd, false)
 			if !remoteHasPool {
 				return "installed & ready"
 			}
-			return "up-to-date"
+			return "pushed"
 		}
 		return "failed"
 	}

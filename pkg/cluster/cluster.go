@@ -352,19 +352,24 @@ func LoadDevices() map[string]DeviceTarget {
 }
 
 func SaveDevice(name, host string, port int) {
-	ep := fmt.Sprintf("%s:%d", host, port)
-	if strings.Contains(host, ":") {
-		ep = host
+	user, h, p, _ := config.ParseEndpoint(host, port)
+	ep := fmt.Sprintf("%s:%d", h, p)
+	if user != "" {
+		ep = fmt.Sprintf("%s@%s:%d", user, h, p)
 	}
 	registry := config.LoadRegistry()
 	uniqueName := GetUniqueAlias(strings.ToLower(strings.TrimSpace(name)), ep, registry)
-	registry[ep] = &config.DeviceEntry{
+	entry := &config.DeviceEntry{
 		Alias:      uniqueName,
 		NativeName: strings.ToLower(strings.TrimSpace(name)),
 		IdType:     "Host",
 		Deleted:    false,
 		UpdatedAt:  float64(time.Now().UnixNano()) / 1e9,
 	}
+	if user != "" {
+		entry.User = user
+	}
+	registry[ep] = entry
 	_ = config.SaveRegistry(registry)
 	ReconcileRegistry()
 	BroadcastRegistryToOnlinePeers(false)
