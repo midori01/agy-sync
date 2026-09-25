@@ -189,6 +189,24 @@ func GetGoInstallAdvice() (string, string) {
 	}
 	return "Linux", "curl -fsSL https://go.dev/dl/ | tar -C /usr/local"
 }
+// CheckGoCompiler detects local Go compiler availability, version, and cross-compilation capability.
+func CheckGoCompiler() (bool, string) {
+	goPath, err := exec.LookPath("go")
+	if err != nil || goPath == "" {
+		return false, "not installed"
+	}
+	out, err := exec.Command(goPath, "version").Output()
+	if err != nil {
+		return true, "installed (version unknown)"
+	}
+	verStr := strings.TrimSpace(string(out))
+	parts := strings.Fields(verStr)
+	v := verStr
+	if len(parts) >= 3 {
+		v = parts[2]
+	}
+	return true, fmt.Sprintf("%s (JIT cross-compile ready)", v)
+}
 
 // CmdDoctor executes a comprehensive system and environment diagnostics report.
 func CmdDoctor() {
@@ -261,11 +279,15 @@ func CmdDoctor() {
 	fmt.Printf("│  Cluster Registry          : 🪪 %d node(s) registered in devices.json\n", activeCount)
 	fmt.Printf("│  Host Architecture         : 💻 %s/%s\n", runtime.GOOS, runtime.GOARCH)
 
-	// 7. Cross-Architecture Engine Readiness
-	hasGo := false
-	if _, err := exec.LookPath("go"); err == nil {
-		hasGo = true
+	// 7. Go Compiler & Cross-Architecture Engine
+	goOk, goVer := CheckGoCompiler()
+	if goOk {
+		fmt.Printf("│  Go Cross-Build Toolchain  : 🟢 Ready (%s)\n", goVer)
+	} else {
+		platformName, installGoCmd := GetGoInstallAdvice()
+		fmt.Printf("│  Go Cross-Build Toolchain  : ⚪ Optional (%s: '%s')\n", platformName, installGoCmd)
 	}
+
 	canonDir := filepath.Dir(config.AgySyncScript)
 	hasArm64 := false
 	hasAmd64 := false
@@ -281,10 +303,12 @@ func CmdDoctor() {
 	}
 
 	platformName, installGoCmd := GetGoInstallAdvice()
-	if hasArm64 && hasAmd64 {
+	if goOk && hasArm64 && hasAmd64 {
+		fmt.Println("│  Cross-Arch Deployment     : 🟢 Full (Dual-arch cached + JIT cross-compiler)")
+	} else if goOk {
+		fmt.Println("│  Cross-Arch Deployment     : 🟢 Full (JIT compiler ready for all architectures)")
+	} else if hasArm64 && hasAmd64 {
 		fmt.Println("│  Cross-Arch Deployment     : 🟢 Ready (Dual-arch cached: arm64, amd64)")
-	} else if hasGo {
-		fmt.Println("│  Cross-Arch Deployment     : 🟢 Ready (Go cross-compiler available)")
 	} else {
 		fmt.Printf("│  Cross-Arch Deployment     : 🟡 Local %s only (%s: '%s')\n", runtime.GOARCH, platformName, installGoCmd)
 	}
@@ -301,7 +325,7 @@ func CmdDoctor() {
 		}
 	}
 
-	if !hasGo && !(hasArm64 && hasAmd64) {
+	if !goOk && !(hasArm64 && hasAmd64) {
 		fmt.Printf("Would you like to install Go compiler for cross-architecture deployment (%s)? [y/N]: ", installGoCmd)
 		text, _ := reader.ReadString('\n')
 		text = strings.ToLower(strings.TrimSpace(text))
