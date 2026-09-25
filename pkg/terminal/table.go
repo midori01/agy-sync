@@ -32,6 +32,8 @@ type SyncResult struct {
 	DBPulled    int
 	ArtPushed   int
 	ArtPulled   int
+	BytesPushed int64
+	BytesPulled int64
 }
 
 func CompactPath(pStr string, maxW ...int) string {
@@ -144,7 +146,18 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 		}
 		lines = append(lines, fmt.Sprintf("│ %s │", PadTo("❌ "+errMsg, innerW)))
 	} else if len(res.Changes) == 0 {
-		footer := fmt.Sprintf("✨ 100%% In Sync (%d assets verified identical)", len(res.Unchanged))
+		totBytes := res.BytesPushed + res.BytesPulled
+		dataStr := ""
+		if totBytes > 0 {
+			dataStr = fmt.Sprintf(" (%s transferred)", FormatBytes(totBytes))
+		}
+		footer := fmt.Sprintf("✨ 100%% In Sync (%d assets verified identical%s)", len(res.Unchanged), dataStr)
+		if StrWidth(footer) > innerW {
+			footer = fmt.Sprintf("✨ 100%% In Sync (%d verified · %s)", len(res.Unchanged), FormatBytes(totBytes, true))
+			if StrWidth(footer) > innerW {
+				footer = TruncateWidth(footer, innerW)
+			}
+		}
 		lines = append(lines, fmt.Sprintf("│ %s │", PadTo(footer, innerW)))
 	} else {
 		lines = append(lines, divider)
@@ -173,9 +186,25 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 			lines = append(lines, fmt.Sprintf("│ %s%s%s │", lStr, strings.Repeat(" ", sp), desc))
 		}
 		lines = append(lines, divider)
-		footer := fmt.Sprintf("✨ All states synchronized (%d changed, %d identical)", len(res.Changes), len(res.Unchanged))
-		if res.HasWarnings {
-			footer = fmt.Sprintf("⚠️ Synchronized with warnings (%d changed, %d identical, %d diverged)", len(res.Changes)-len(res.Warnings), len(res.Unchanged), len(res.Warnings))
+		totBytes := res.BytesPushed + res.BytesPulled
+		var footer string
+		if totBytes > 0 {
+			dataStr := fmt.Sprintf("%s transferred: ↑ %s, ↓ %s", FormatBytes(totBytes), FormatBytes(res.BytesPushed), FormatBytes(res.BytesPulled))
+			footer = fmt.Sprintf("✨ All states synchronized (%s)", dataStr)
+			if res.HasWarnings {
+				footer = fmt.Sprintf("⚠️ Synchronized with warnings (%s)", dataStr)
+			}
+			if StrWidth(footer) > innerW {
+				footer = fmt.Sprintf("✨ Synced: %s (↑%s ↓%s)", FormatBytes(totBytes, true), FormatBytes(res.BytesPushed, true), FormatBytes(res.BytesPulled, true))
+				if StrWidth(footer) > innerW {
+					footer = TruncateWidth(footer, innerW)
+				}
+			}
+		} else {
+			footer = fmt.Sprintf("✨ All states synchronized (%d changed, %d identical)", len(res.Changes), len(res.Unchanged))
+			if res.HasWarnings {
+				footer = fmt.Sprintf("⚠️ Synchronized with warnings (%d changed, %d identical, %d diverged)", len(res.Changes)-len(res.Warnings), len(res.Unchanged), len(res.Warnings))
+			}
 		}
 		lines = append(lines, fmt.Sprintf("│ %s │", PadTo(footer, innerW)))
 	}
@@ -187,6 +216,7 @@ func RenderSingleNodeCard(res *SyncResult, totalW ...int) {
 func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt, failCnt int) {
 	colWidths := []int{8, 13, 6, 9, 6, 6, 4}
 	headers := []string{"Node", "Route", "Ping", "Result", "DBs", "Arts", "Time"}
+	hasDataCol := false
 
 	termW := GetTerminalWidth()
 	if termW > 0 && termW < 74 {
@@ -195,6 +225,10 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 		} else {
 			colWidths = []int{7, 10, 5, 8, 5, 5, 4} // ~62 cols
 		}
+	} else if termW >= 74 {
+		colWidths = []int{7, 9, 5, 8, 5, 5, 6, 4} // exactly 74 cols
+		headers = []string{"Node", "Route", "Ping", "Result", "DBs", "Arts", "Data", "Time"}
+		hasDataCol = true
 	}
 
 	totW := 0
@@ -230,8 +264,14 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 		}
 		rTier := res.RouteTier
 		rStr := "🌐 Tailnet"
+		if colWidths[1] <= 9 {
+			rStr = "🌐Tailnet"
+		}
 		if strings.Contains(rTier, "LAN") {
 			rStr = "⚡ LAN Direct"
+			if colWidths[1] <= 9 {
+				rStr = "⚡LAN Dir"
+			}
 		}
 		lat := res.RouteLat
 		pingStr := "—"
@@ -281,7 +321,22 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 			timeStr = fmt.Sprintf("%.1fs", res.Elapsed)
 		}
 
-		rowVals := []string{pName, rStr, pingStr, resStr, dbStr, artStr, timeStr}
+		var rowVals []string
+		if hasDataCol {
+			dataStr := "—"
+			if res.Success {
+				nodeBytes := res.BytesPushed + res.BytesPulled
+				if nodeBytes > 0 {
+					dataStr = FormatBytes(nodeBytes, true)
+				} else {
+					dataStr = "0B"
+				}
+			}
+			rowVals = []string{pName, rStr, pingStr, resStr, dbStr, artStr, dataStr, timeStr}
+		} else {
+			rowVals = []string{pName, rStr, pingStr, resStr, dbStr, artStr, timeStr}
+		}
+
 		var rowCells []string
 		for i, v := range rowVals {
 			rowCells = append(rowCells, PadTo(v, colWidths[i]))
@@ -290,18 +345,33 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 	}
 
 	warnCnt := 0
+	var totPushed, totPulled int64
 	for _, res := range results {
 		if res.Success && res.HasWarnings {
 			warnCnt++
 		}
+		totPushed += res.BytesPushed
+		totPulled += res.BytesPulled
+	}
+	totClusterBytes := totPushed + totPulled
+
+	dataVolStr := ""
+	if totClusterBytes > 0 {
+		dataVolStr = fmt.Sprintf(" · %s (↑ %s, ↓ %s)", FormatBytes(totClusterBytes), FormatBytes(totPushed), FormatBytes(totPulled))
 	}
 
 	lines = append(lines, MakeTableDivider(colWidths, "├", "┴", "┤"))
-	footer := fmt.Sprintf("✨ Cluster Sync: %d/%d nodes synced in %.2fs (%d failed)", successCnt, len(results), totalElapsed, failCnt)
+	footer := fmt.Sprintf("✨ Cluster Sync: %d/%d nodes synced in %.2fs%s (%d failed)", successCnt, len(results), totalElapsed, dataVolStr, failCnt)
 	if warnCnt > 0 && failCnt == 0 {
-		footer = fmt.Sprintf("⚠️ Cluster Sync: %d/%d synced, %d diverged in %.2fs", successCnt, len(results), warnCnt, totalElapsed)
+		footer = fmt.Sprintf("⚠️ Cluster Sync: %d/%d synced, %d diverged in %.2fs%s", successCnt, len(results), warnCnt, totalElapsed, dataVolStr)
 	} else if failCnt > 0 {
-		footer = fmt.Sprintf("❌ Cluster Sync: %d/%d succeeded, %d failed in %.2fs", successCnt, len(results), failCnt, totalElapsed)
+		footer = fmt.Sprintf("❌ Cluster Sync: %d/%d succeeded, %d failed in %.2fs%s", successCnt, len(results), failCnt, totalElapsed, dataVolStr)
+	}
+	if StrWidth(footer) > innerW {
+		footer = fmt.Sprintf("✨ Cluster: %d/%d synced in %.1fs · %s (↑%s ↓%s)", successCnt, len(results), totalElapsed, FormatBytes(totClusterBytes, true), FormatBytes(totPushed, true), FormatBytes(totPulled, true))
+		if StrWidth(footer) > innerW {
+			footer = TruncateWidth(footer, innerW)
+		}
 	}
 	lines = append(lines, fmt.Sprintf("│ %s │", PadTo(footer, innerW)))
 	lines = append(lines, fmt.Sprintf("└%s┘", strings.Repeat("─", totW-2)))

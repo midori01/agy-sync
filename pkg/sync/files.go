@@ -17,6 +17,7 @@ import (
 	"agy-sync/pkg/cluster"
 	"agy-sync/pkg/config"
 	"agy-sync/pkg/ssh"
+	"agy-sync/pkg/terminal"
 )
 
 func randomToken(n int) string {
@@ -25,7 +26,7 @@ func randomToken(n int) string {
 	return hex.EncodeToString(b)
 }
 
-func SyncSingleFile(localPath, remotePath, host string, port int, name string, clockSkew float64, probeCache map[string]*RemoteFileInfo, mode ...string) string {
+func SyncSingleFile(localPath, remotePath, host string, port int, name string, clockSkew float64, probeCache map[string]*RemoteFileInfo, tracker *ByteTracker, mode ...string) string {
 	fi, err := os.Stat(localPath)
 	localExists := (err == nil && !fi.IsDir())
 
@@ -114,6 +115,9 @@ func SyncSingleFile(localPath, remotePath, host string, port int, name string, c
 		}
 		proc.Stdin = bytes.NewReader(data)
 		if err := proc.Run(); err == nil {
+			if tracker != nil {
+				tracker.AddPush(int64(len(data)))
+			}
 			return "pushed"
 		}
 		return "failed"
@@ -130,6 +134,9 @@ func SyncSingleFile(localPath, remotePath, host string, port int, name string, c
 				}
 			}
 			if err := config.WriteFileAtomic(localPath, out, modeVal); err == nil {
+				if tracker != nil {
+					tracker.AddPull(int64(len(out)))
+				}
 				if normalizedRemoteMTime > 0 {
 					mtime := time.Unix(normalizedRemoteMTime, 0)
 					_ = os.Chtimes(localPath, mtime, mtime)
@@ -143,7 +150,7 @@ func SyncSingleFile(localPath, remotePath, host string, port int, name string, c
 	return "unchanged"
 }
 
-func SyncAuthorizedKeys(host string, port int, remHome string, probeCache map[string]*RemoteFileInfo) string {
+func SyncAuthorizedKeys(host string, port int, remHome string, probeCache map[string]*RemoteFileInfo, tracker ...*ByteTracker) string {
 	localLines := make(map[string]bool)
 	if data, err := os.ReadFile(config.AuthKeysFile); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
@@ -201,6 +208,9 @@ func SyncAuthorizedKeys(host string, port int, remHome string, probeCache map[st
 
 	if localChanged {
 		_ = config.WriteFileAtomic(config.AuthKeysFile, []byte(content), 0600)
+		if len(tracker) > 0 && tracker[0] != nil {
+			tracker[0].AddPull(int64(len(content)))
+		}
 	}
 
 	if remoteChanged {
@@ -213,12 +223,15 @@ func SyncAuthorizedKeys(host string, port int, remHome string, probeCache map[st
 		if err := proc.Run(); err != nil {
 			return "failed to update remote keys"
 		}
+		if len(tracker) > 0 && tracker[0] != nil {
+			tracker[0].AddPush(int64(len(content)))
+		}
 	}
 
 	return fmt.Sprintf("%d active key(s)", len(merged))
 }
 
-func SyncClusterRegistry(host string, port int, clockSkew float64, remHome string, probeCache map[string]*RemoteFileInfo) string {
+func SyncClusterRegistry(host string, port int, clockSkew float64, remHome string, probeCache map[string]*RemoteFileInfo, tracker ...*ByteTracker) string {
 	localReg := config.LoadRegistry()
 	remDev := config.DevicesJSONFile
 	remConf := config.ConfFile
@@ -288,6 +301,9 @@ func SyncClusterRegistry(host string, port int, clockSkew float64, remHome strin
 	if localChg || len(localReg) == 0 {
 		_ = config.SaveRegistry(merged)
 		cluster.ReconcileRegistry()
+		if len(tracker) > 0 && tracker[0] != nil && len(stdout) > 0 {
+			tracker[0].AddPull(int64(len(stdout)))
+		}
 	}
 
 	if remoteChg || len(remoteReg) == 0 {
@@ -301,6 +317,9 @@ func SyncClusterRegistry(host string, port int, clockSkew float64, remHome strin
 		if err := proc.Run(); err != nil {
 			return "failed to update remote registry"
 		}
+		if len(tracker) > 0 && tracker[0] != nil {
+			tracker[0].AddPush(int64(len(data)))
+		}
 		_, _, _, _ = ssh.RunSSHCmd(host, port, fmt.Sprintf("%s agy-sync refresh-registry 2>/dev/null || true", config.PathPrefix), false)
 	}
 
@@ -313,7 +332,7 @@ func SyncClusterRegistry(host string, port int, clockSkew float64, remHome strin
 	return fmt.Sprintf("synchronized (%d active nodes)", activeCount)
 }
 
-func SyncHistoryJsonl(host string, port int, remHome string, probeCache map[string]*RemoteFileInfo) string {
+func SyncHistoryJsonl(host string, port int, remHome string, probeCache map[string]*RemoteFileInfo, tracker ...*ByteTracker) string {
 	remHist := config.HistoryFile
 	if remHome != "" {
 		remHist = config.ToRemotePath(config.HistoryFile, remHome)
@@ -419,6 +438,9 @@ func SyncHistoryJsonl(host string, port int, remHome string, probeCache map[stri
 
 	if localChanged {
 		_ = config.WriteFileAtomic(config.HistoryFile, []byte(mergedContent), 0644)
+		if len(tracker) > 0 && tracker[0] != nil {
+			tracker[0].AddPull(int64(len(mergedContent)))
+		}
 	}
 
 	if remoteChanged {
@@ -429,7 +451,17 @@ func SyncHistoryJsonl(host string, port int, remHome string, probeCache map[stri
 		proc := exec.Command("ssh", sshArgs...)
 		proc.Stdin = strings.NewReader(mergedContent)
 		if err := proc.Run(); err != nil {
-			return "failed to update remote history"
+			// Retry once with clean socket to recover from stale connection
+			ssh.CloseControlMaster(host, port)
+			time.Sleep(500 * time.Millisecond)
+			procRetry := exec.Command("ssh", ssh.GetSSHCmd(host, port, cmd, true)...)
+			procRetry.Stdin = strings.NewReader(mergedContent)
+			if errRetry := procRetry.Run(); errRetry != nil {
+				return "failed to update remote history"
+			}
+		}
+		if len(tracker) > 0 && tracker[0] != nil {
+			tracker[0].AddPush(int64(len(mergedContent)))
 		}
 	}
 
@@ -439,9 +471,15 @@ func SyncHistoryJsonl(host string, port int, remHome string, probeCache map[stri
 	return fmt.Sprintf("%d entries merged", len(list))
 }
 
-func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome string) (int, int) {
+func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.ConfigDir, 0755)
 	localFiles := make(map[string][2]int64)
+
+	reportProgress := func(msg string) {
+		if len(onProgress) > 0 && onProgress[0] != nil {
+			onProgress[0](msg)
+		}
+	}
 
 	_ = filepath.Walk(config.ConfigDir, func(path string, info os.FileInfo, err error) error {
 		if err == nil && !info.IsDir() {
@@ -513,9 +551,25 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 			toPull = append(toPull, k)
 		}
 	}
+	sort.Strings(toPush)
+	sort.Strings(toPull)
+
+	var totalPushBytes int64
+	for _, k := range toPush {
+		if loc, ok := localFiles[k]; ok {
+			totalPushBytes += loc[1]
+		}
+	}
+	var totalPullBytes int64
+	for _, k := range toPull {
+		if rem, ok := remoteFiles[k]; ok {
+			totalPullBytes += rem[1]
+		}
+	}
 
 	pushedCnt := 0
 	if len(toPush) > 0 {
+		reportProgress(fmt.Sprintf("Skills ↑ [%s/%s (0%%)]", terminal.FormatBytes(0, true), terminal.FormatBytes(totalPushBytes, true)))
 		inputList := strings.Join(toPush, "\n") + "\n"
 		p1 := exec.Command("tar", "-C", config.ConfigDir, "-czf", "-", "-T", "-")
 		p1.Stdin = strings.NewReader(inputList)
@@ -523,28 +577,59 @@ func SyncConfigsAndSkills(host string, port int, clockSkew float64, remHome stri
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remCfg, remCfg), true)
 		p2 := exec.Command("ssh", sshArgs...)
 
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
+			pct := 0.0
+			if totalPushBytes > 0 {
+				pct = (float64(cur) / float64(totalPushBytes)) * 100.0
+				if pct > 100.0 {
+					pct = 100.0
+				}
+			}
+			reportProgress(fmt.Sprintf("Skills ↑ [%s/%s (%.0f%%)]", terminal.FormatBytes(cur, true), terminal.FormatBytes(totalPushBytes, true), pct))
+		})
+		if err == nil {
 			pushedCnt = len(toPush)
+			if tracker != nil {
+				tracker.AddPush(nBytes)
+			}
 		}
 	}
 
 	pulledCnt := 0
 	if len(toPull) > 0 {
+		reportProgress(fmt.Sprintf("Skills ↓ [%s/%s (0%%)]", terminal.FormatBytes(0, true), terminal.FormatBytes(totalPullBytes, true)))
 		inputList := strings.Join(toPull, "\n") + "\n"
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -czf - -T -", remCfg), true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
 		p2 := exec.Command("tar", "-C", config.ConfigDir, "--no-same-owner", "-xzf", "-")
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
+			pct := 0.0
+			if totalPullBytes > 0 {
+				pct = (float64(cur) / float64(totalPullBytes)) * 100.0
+				if pct > 100.0 {
+					pct = 100.0
+				}
+			}
+			reportProgress(fmt.Sprintf("Skills ↓ [%s/%s (%.0f%%)]", terminal.FormatBytes(cur, true), terminal.FormatBytes(totalPullBytes, true), pct))
+		})
+		if err == nil {
 			pulledCnt = len(toPull)
+			if tracker != nil {
+				tracker.AddPull(nBytes)
+			}
 		}
 	}
 
 	return pushedCnt, pulledCnt
 }
 
-func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, probeCache map[string]*RemoteFileInfo) string {
+func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, probeCache map[string]*RemoteFileInfo, tracker ...*ByteTracker) string {
+	var trk *ByteTracker
+	if len(tracker) > 0 {
+		trk = tracker[0]
+	}
 	remPoolCfg := config.PoolAccountsFile
 	if remHome != "" {
 		remPoolCfg = config.ToRemotePath(config.PoolAccountsFile, remHome)
@@ -584,7 +669,7 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 	}
 
 	if localExists && !remoteExists {
-		st := SyncSingleFile(config.PoolAccountsFile, remPoolCfg, host, port, "agy-pool-accounts.json", clockSkew, probeCache, "600")
+		st := SyncSingleFile(config.PoolAccountsFile, remPoolCfg, host, port, "agy-pool-accounts.json", clockSkew, probeCache, trk, "600")
 		if st == "failed" {
 			return "failed"
 		}
@@ -592,7 +677,7 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 	}
 
 	if !localExists && remoteExists {
-		st := SyncSingleFile(config.PoolAccountsFile, remPoolCfg, host, port, "agy-pool-accounts.json", clockSkew, probeCache, "600")
+		st := SyncSingleFile(config.PoolAccountsFile, remPoolCfg, host, port, "agy-pool-accounts.json", clockSkew, probeCache, trk, "600")
 		if st == "failed" {
 			return "failed"
 		}
@@ -892,6 +977,9 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 
 	if localChanged {
 		_ = config.WriteFileAtomic(config.PoolAccountsFile, []byte(contentStr), 0600)
+		if trk != nil {
+			trk.AddPull(int64(len(contentStr)))
+		}
 	}
 
 	if remoteChanged {
@@ -903,6 +991,9 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 		proc.Stdin = strings.NewReader(contentStr)
 		if err := proc.Run(); err != nil {
 			return "failed to update remote accounts"
+		}
+		if trk != nil {
+			trk.AddPush(int64(len(contentStr)))
 		}
 	}
 
@@ -916,7 +1007,7 @@ func SyncPoolAccounts(host string, port int, remHome string, clockSkew float64, 
 	return fmt.Sprintf("identical (%d accounts)", len(mergedAccs))
 }
 
-func SyncPoolEngine(host string, port int, remHome string, clockSkew float64, probeCache ...map[string]*RemoteFileInfo) string {
+func SyncPoolEngine(host string, port int, remHome string, clockSkew float64, probeCache map[string]*RemoteFileInfo, tracker ...*ByteTracker) string {
 	remPoolDir := fmt.Sprintf("%s/agy-pool", remHome)
 	localHasPool := false
 	if fi, err := os.Stat(config.PoolDir); err == nil && fi.IsDir() {
@@ -936,8 +1027,8 @@ func SyncPoolEngine(host string, port int, remHome string, clockSkew float64, pr
 	}
 
 	// 1-RTT Fast Path: Probe cache hit check (0 extra network roundtrips)
-	if len(probeCache) > 0 && probeCache[0] != nil && probeCache[0][remBin] != nil {
-		cached := probeCache[0][remBin]
+	if probeCache != nil && probeCache[remBin] != nil {
+		cached := probeCache[remBin]
 		if locHash != "" && (cached.BodySHA == locHash || cached.SHA256 == locHash) {
 			return "up-to-date"
 		}
@@ -985,8 +1076,12 @@ else:
 			sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=.git -czf - agy-pool", remHome), true)
 			p1 := exec.Command("ssh", sshArgs...)
 			p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
-			if err := RunPipedCommands(p1, p2); err == nil {
+			nBytes, err := RunPipedCommandsWithBytes(p1, p2)
+			if err == nil {
 				_ = os.Chmod(localBin, 0755)
+				if len(tracker) > 0 && tracker[0] != nil {
+					tracker[0].AddPull(nBytes)
+				}
 				return "pulled & ready"
 			}
 			return "failed"
@@ -998,7 +1093,11 @@ else:
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=.git", "-czf", "-", "agy-pool")
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2)
+		if err == nil {
+			if len(tracker) > 0 && tracker[0] != nil {
+				tracker[0].AddPush(nBytes)
+			}
 			postCmd := fmt.Sprintf(`chmod +x '%s/bin/agy-pool' '%s/install.sh' 2>/dev/null || true;
 if [ -w /usr/local/bin ] || [ "$(id -u)" -eq 0 ]; then
   ln -sf '%s/bin/agy-pool' /usr/local/bin/agy-pool 2>/dev/null || true;
@@ -1017,14 +1116,12 @@ fi`, remPoolDir, remPoolDir, remPoolDir, remPoolDir)
 	return "none"
 }
 
-func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64, force ...bool) string {
+func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64, isForce bool, tracker ...*ByteTracker) string {
 	remGoDir := fmt.Sprintf("%s/agy-sync-go", remHome)
 	localHasGo := false
 	if fi, err := os.Stat(config.AgySyncGoDir); err == nil && fi.IsDir() {
 		localHasGo = true
 	}
-
-	isForce := len(force) > 0 && force[0]
 
 	remCheckCmd := fmt.Sprintf("if [ -d '%s' ]; then echo YES; git -C '%s' rev-parse HEAD 2>/dev/null || echo NONE; git -C '%s' log -1 --format=%%ct 2>/dev/null || echo 0; git -C '%s' status --porcelain --untracked-files=no 2>/dev/null; else echo NO; fi", remGoDir, remGoDir, remGoDir, remGoDir)
 	remOut, _, _, _ := ssh.RunSSHCmd(host, port, remCheckCmd, false)
@@ -1040,7 +1137,11 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64, for
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' --exclude=.git/index.lock -czf - agy-sync-go", remHome), true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2)
+		if err == nil {
+			if len(tracker) > 0 && tracker[0] != nil {
+				tracker[0].AddPull(nBytes)
+			}
 			return "pulled & ready"
 		}
 		return "failed"
@@ -1051,7 +1152,11 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64, for
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 		p2 := exec.Command("ssh", sshArgs...)
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2)
+		if err == nil {
+			if len(tracker) > 0 && tracker[0] != nil {
+				tracker[0].AddPush(nBytes)
+			}
 			return "installed & ready"
 		}
 		return "failed"
@@ -1134,7 +1239,11 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64, for
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("git -C '%s' checkout . 2>/dev/null; git -C '%s' clean -fd 2>/dev/null; tar -C '%s' --no-same-owner -xzf - 2>/dev/null && git -C '%s' checkout . 2>/dev/null", remGoDir, remGoDir, remHome, remGoDir), true)
 		p2 := exec.Command("ssh", sshArgs...)
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2)
+		if err == nil {
+			if len(tracker) > 0 && tracker[0] != nil {
+				tracker[0].AddPush(nBytes)
+			}
 			return "pushed"
 		}
 		return "failed"
@@ -1145,8 +1254,12 @@ func SyncAgySyncGo(host string, port int, remHome string, clockSkew float64, for
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' --exclude=bin --exclude='*.tmp*' --exclude=.git/index.lock -czf - agy-sync-go", remHome), true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p2 := exec.Command("tar", "-C", config.HomeDir, "--no-same-owner", "-xzf", "-")
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2)
+		if err == nil {
 			_ = exec.Command("git", "-C", config.AgySyncGoDir, "checkout", ".").Run()
+			if len(tracker) > 0 && tracker[0] != nil {
+				tracker[0].AddPull(nBytes)
+			}
 			return "pulled"
 		}
 		return "failed"

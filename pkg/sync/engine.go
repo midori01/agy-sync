@@ -108,7 +108,7 @@ fi`, remGoDir, normLocalArch, remCommit, remGoDir, remGoDir, remGoDir, normLocal
 	return nil, fmt.Errorf("remote %s cannot supply %s binary", host, normLocalArch)
 }
 
-func SyncEngine(host string, port int, remHome string, remArch string, remCommit string, goSrcStat string, clockSkew float64, probeCache map[string]*RemoteFileInfo, force ...bool) string {
+func SyncEngine(host string, port int, remHome string, remArch string, remCommit string, goSrcStat string, clockSkew float64, probeCache map[string]*RemoteFileInfo, isForce bool, tracker ...*ByteTracker) string {
 	fi, err := os.Stat(config.AgySyncScript)
 	if err != nil || fi.IsDir() {
 		return "none"
@@ -118,8 +118,6 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 	if remHome != "" {
 		remBin = config.ToRemotePath(config.AgySyncScript, remHome)
 	}
-
-	isForce := len(force) > 0 && force[0]
 
 	// 1. 1-RTT Commit Match: If binary commits match and not forced, 100% identical across any architecture
 	if !isForce && remCommit != "" && remCommit != "NONE" && remCommit != "dev" && config.GitCommit != "dev" && remCommit == config.GitCommit {
@@ -165,6 +163,9 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 				_ = os.Rename(tmpLocal, config.AgySyncScript)
 				_ = os.Chmod(config.AgySyncScript, 0755)
 				config.GitCommit = remCommit
+				if len(tracker) > 0 && tracker[0] != nil {
+					tracker[0].AddPull(int64(len(binData)))
+				}
 				if _, err := os.Stat("/data/data/com.termux/files/usr/bin"); err == nil {
 					_ = os.Remove("/data/data/com.termux/files/usr/bin/agy-sync")
 					_ = os.Symlink(config.AgySyncScript, "/data/data/com.termux/files/usr/bin/agy-sync")
@@ -245,6 +246,9 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 	proc := exec.Command("ssh", sshArgs...)
 	proc.Stdin = bytes.NewReader(targetContent)
 	if err := proc.Run(); err == nil {
+		if len(tracker) > 0 && tracker[0] != nil {
+			tracker[0].AddPush(int64(len(targetContent)))
+		}
 		return "pushed"
 	}
 	return "failed"

@@ -169,34 +169,51 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 				return res
 			}
 		} else {
-			if createdSpinner && activeSpinner != nil {
-				activeSpinner.Stop()
-			}
-			errMsg := strings.TrimSpace(stderr)
-			if errMsg == "" {
-				errMsg = "Handshake check failed"
-			}
-			if bgPingChan != nil {
-				select {
-				case lat := <-bgPingChan:
-					if lat > 0 {
-						routeLat = lat
-					}
-				default:
+			// If banner exchange or connection timed out on a remote/mobile node, retry once with fresh socket to allow wake-up
+			if strings.Contains(stderr, "timed out") || strings.Contains(stderr, "Connection timed out") || strings.Contains(stderr, "Connection refused") {
+				stepStatus("Retrying handshake (waking node)")
+				ssh.CloseControlMaster(host, port)
+				time.Sleep(1 * time.Second)
+				stdoutRetry, stderrRetry, _, errRetry := ssh.RunSSHCmd(host, port, handshakeCmd, false, 12)
+				if errRetry == nil && strings.Contains(stdoutRetry, "READY") {
+					stdout = stdoutRetry
+					stderr = stderrRetry
+					err = nil
+					t1 = time.Now()
+					rtt = t1.Sub(t0).Seconds()
 				}
 			}
-			res := &terminal.SyncResult{
-				Success:   false,
-				PeerName:  peerName,
-				RouteTier: routeTier,
-				RouteLat:  routeLat,
-				Elapsed:   math.Round(time.Since(t0).Seconds()*100) / 100.0,
-				Error:     errMsg,
+
+			if err != nil || !strings.Contains(stdout, "READY") {
+				if createdSpinner && activeSpinner != nil {
+					activeSpinner.Stop()
+				}
+				errMsg := strings.TrimSpace(stderr)
+				if errMsg == "" {
+					errMsg = "Handshake check failed"
+				}
+				if bgPingChan != nil {
+					select {
+					case lat := <-bgPingChan:
+						if lat > 0 {
+							routeLat = lat
+						}
+					default:
+					}
+				}
+				res := &terminal.SyncResult{
+					Success:   false,
+					PeerName:  peerName,
+					RouteTier: routeTier,
+					RouteLat:  routeLat,
+					Elapsed:   math.Round(time.Since(t0).Seconds()*100) / 100.0,
+					Error:     errMsg,
+				}
+				if !isBatch {
+					terminal.RenderSingleNodeCard(res)
+				}
+				return res
 			}
-			if !isBatch {
-				terminal.RenderSingleNodeCard(res)
-			}
-			return res
 		}
 	}
 
@@ -296,6 +313,8 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 	}
 	probeCache := BatchProbeRemoteFiles(host, port, batchTargets)
 
+	tracker := NewByteTracker()
+
 	var changes []terminal.ChangeItem
 	var unchanged []string
 	var warnings []terminal.ChangeItem
@@ -328,25 +347,25 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 1.5 Sync Cluster Device Registry
 	stepStatus("Cluster registry & keys")
-	regStat := SyncClusterRegistry(host, port, clockSkew, remHome, probeCache)
+	regStat := SyncClusterRegistry(host, port, clockSkew, remHome, probeCache, tracker)
 	recordAsset("Cluster Registry", regStat, "🪪", regStat == "pushed" || regStat == "pulled" || strings.Contains(regStat, "merged"))
 
 	// 1.6 Sync SSH Authorized Keys
-	authStat := SyncAuthorizedKeys(host, port, remHome, probeCache)
+	authStat := SyncAuthorizedKeys(host, port, remHome, probeCache, tracker)
 	recordAsset("SSH Authorized Keys", authStat, "🔑", authStat == "pushed" || authStat == "pulled" || strings.Contains(authStat, "merged"))
 
 	// 2. Sync Rules
 	stepStatus("Constitutional rules & memory")
-	rulesStat := SyncSingleFile(config.RulesFile, config.ToRemotePath(config.RulesFile, remHome), host, port, "GEMINI.md", clockSkew, probeCache)
+	rulesStat := SyncSingleFile(config.RulesFile, config.ToRemotePath(config.RulesFile, remHome), host, port, "GEMINI.md", clockSkew, probeCache, tracker)
 	recordAsset("Constitutional Rules", rulesStat, "📜", rulesStat == "pushed" || rulesStat == "pulled")
 
 	// 3. Sync Memory Relay
-	handoffStat := SyncSingleFile(config.HandoffFile, config.ToRemotePath(config.HandoffFile, remHome), host, port, "session_handoff.md", clockSkew, probeCache)
+	handoffStat := SyncSingleFile(config.HandoffFile, config.ToRemotePath(config.HandoffFile, remHome), host, port, "session_handoff.md", clockSkew, probeCache, tracker)
 	recordAsset("Memory Relay", handoffStat, "🧠", handoffStat == "pushed" || handoffStat == "pulled")
 
 	// 3.4 Sync Go Synchronizer Source Code (determines git version parity & direction)
 	stepStatus("Go synchronizer source")
-	goSrcStat := SyncAgySyncGo(host, port, remHome, clockSkew, isForce)
+	goSrcStat := SyncAgySyncGo(host, port, remHome, clockSkew, isForce, tracker)
 	pulledNewVersion := false
 	if goSrcStat != "none" {
 		recordAsset("Go Synchronizer Source", goSrcStat, "🐹", goSrcStat == "pushed" || goSrcStat == "pulled" || goSrcStat == "installed & ready")
@@ -357,7 +376,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 3.5 Sync Engine (uses goSrcStat to safely determine binary build/push/rebuild)
 	stepStatus("Synchronizer engine")
-	binStat := SyncEngine(host, port, remHome, remArch, remCommit, goSrcStat, clockSkew, probeCache, isForce)
+	binStat := SyncEngine(host, port, remHome, remArch, remCommit, goSrcStat, clockSkew, probeCache, isForce, tracker)
 	recordAsset("Synchronizer Engine", binStat, "⚡", binStat == "pushed" || binStat == "pulled" || strings.Contains(binStat, "rebuilt") || strings.Contains(binStat, "compiled"))
 	if strings.Contains(binStat, "rebuilt") || strings.Contains(binStat, "pulled") {
 		pulledNewVersion = true
@@ -371,7 +390,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 		hasToken = true
 	}
 	if hasToken {
-		tokStat := SyncSingleFile(config.OAuthTokenFile, remToken, host, port, "antigravity-oauth-token", clockSkew, probeCache, "600")
+		tokStat := SyncSingleFile(config.OAuthTokenFile, remToken, host, port, "antigravity-oauth-token", clockSkew, probeCache, tracker, "600")
 		recordAsset("Antigravity Token", tokStat, "🎫", tokStat == "pushed" || tokStat == "pulled")
 	}
 
@@ -381,14 +400,14 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 		hasPoolCfg = true
 	}
 	if hasPoolCfg {
-		poolStat := SyncPoolAccounts(host, port, remHome, clockSkew, probeCache)
+		poolStat := SyncPoolAccounts(host, port, remHome, clockSkew, probeCache, tracker)
 		if poolStat != "none" {
 			recordAsset("Account Pool", poolStat, "👥", strings.Contains(poolStat, "pushed") || strings.Contains(poolStat, "pulled") || strings.Contains(poolStat, "merged"))
 		}
 	}
 
 	// 3.8 Sync Account Pool Engine
-	engineStat := SyncPoolEngine(host, port, remHome, clockSkew, probeCache)
+	engineStat := SyncPoolEngine(host, port, remHome, clockSkew, probeCache, tracker)
 	if engineStat != "none" {
 		recordAsset("Account Pool Engine", engineStat, "🏊", engineStat == "pushed" || engineStat == "pulled" || engineStat == "installed & ready")
 	}
@@ -401,23 +420,23 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 		hasSettings = true
 	}
 	if hasSettings {
-		setStat := SyncSingleFile(config.SettingsFile, remSettings, host, port, "settings.json", clockSkew, probeCache, "600")
+		setStat := SyncSingleFile(config.SettingsFile, remSettings, host, port, "settings.json", clockSkew, probeCache, tracker, "600")
 		recordAsset("CLI Settings", setStat, "🔧", setStat == "pushed" || setStat == "pulled")
 	}
 
 	if _, err := os.Stat(config.ProtoSummariesFile); err == nil {
-		protoStat := SyncSingleFile(config.ProtoSummariesFile, config.ToRemotePath(config.ProtoSummariesFile, remHome), host, port, "jetbox_summaries_proto.pb", clockSkew, probeCache)
+		protoStat := SyncSingleFile(config.ProtoSummariesFile, config.ToRemotePath(config.ProtoSummariesFile, remHome), host, port, "jetbox_summaries_proto.pb", clockSkew, probeCache, tracker)
 		recordAsset("Jetbox Summaries", protoStat, "📊", protoStat == "pushed" || protoStat == "pulled")
 	}
 
 	// 5. Sync Conversation Summaries
 	stepStatus("Conversation index")
-	sumsStat := SyncConversationSummaries(host, port, clockSkew, remHome)
+	sumsStat := SyncConversationSummaries(host, port, clockSkew, remHome, tracker)
 	recordAsset("Conversation Index", sumsStat, "📑", strings.Contains(sumsStat, "pushed") || strings.Contains(sumsStat, "pulled") || strings.Contains(sumsStat, "merged"))
 
 	// 6. Sync Conversation Databases
 	stepStatus("Conversation databases")
-	convPushed, convPulled = SyncConversationDBs(host, port, clockSkew, remHome)
+	convPushed, convPulled = SyncConversationDBs(host, port, clockSkew, remHome, tracker, stepStatus)
 	convChanged := (convPushed > 0 || convPulled > 0)
 	convDesc := "identical"
 	if convChanged {
@@ -427,7 +446,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 7. Sync Annotations
 	stepStatus("Conversation annotations")
-	annPushed, annPulled := SyncAnnotations(host, port, clockSkew, remHome)
+	annPushed, annPulled := SyncAnnotations(host, port, clockSkew, remHome, tracker, stepStatus)
 	annChanged := (annPushed > 0 || annPulled > 0)
 	annDesc := "identical"
 	if annChanged {
@@ -437,7 +456,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 8. Sync Brain Artifacts & Transcripts
 	stepStatus("Brain transcripts & artifacts")
-	brainPushed, brainPulled = SyncBrainSessions(host, port, clockSkew, remHome, stepStatus)
+	brainPushed, brainPulled = SyncBrainSessions(host, port, clockSkew, remHome, tracker, stepStatus)
 	brainChanged := (brainPushed > 0 || brainPulled > 0)
 	brainDesc := "identical"
 	if brainChanged {
@@ -447,12 +466,12 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 9. Sync History Lines
 	stepStatus("Prompt history")
-	histStat := SyncHistoryJsonl(host, port, remHome, probeCache)
+	histStat := SyncHistoryJsonl(host, port, remHome, probeCache, tracker)
 	recordAsset("Prompt History", histStat, "📝", strings.Contains(histStat, "pushed") || strings.Contains(histStat, "pulled") || strings.Contains(histStat, "merged"))
 
 	// 10. Sync Configs & Skills
 	stepStatus("Skills & configurations")
-	cfgPushed, cfgPulled := SyncConfigsAndSkills(host, port, clockSkew, remHome)
+	cfgPushed, cfgPulled := SyncConfigsAndSkills(host, port, clockSkew, remHome, tracker, stepStatus)
 	cfgChanged := (cfgPushed > 0 || cfgPulled > 0)
 	cfgDesc := "identical"
 	if cfgChanged {
@@ -488,17 +507,19 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 		PulledNewVersion: pulledNewVersion,
 		Warnings:         warnings,
 		Failures:         failures,
-		PeerName:    peerName,
-		RouteTier:   routeTier,
-		RouteLat:    routeLat,
-		ClockSkew:   clockSkew,
-		Elapsed:     elapsed,
-		Changes:     changes,
-		Unchanged:   unchanged,
-		DBPushed:    convPushed,
-		DBPulled:    convPulled,
-		ArtPushed:   brainPushed,
-		ArtPulled:   brainPulled,
+		PeerName:         peerName,
+		RouteTier:        routeTier,
+		RouteLat:         routeLat,
+		ClockSkew:        clockSkew,
+		Elapsed:          elapsed,
+		Changes:          changes,
+		Unchanged:        unchanged,
+		DBPushed:         convPushed,
+		DBPulled:         convPulled,
+		ArtPushed:        brainPushed,
+		ArtPulled:        brainPulled,
+		BytesPushed:      tracker.BytesPushed,
+		BytesPulled:      tracker.BytesPulled,
 	}
 
 	if !isBatch {

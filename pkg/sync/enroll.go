@@ -19,7 +19,29 @@ import (
 	"agy-sync/pkg/cluster"
 	"agy-sync/pkg/config"
 	"agy-sync/pkg/ssh"
+	"agy-sync/pkg/terminal"
 )
+
+func getDeployDirSize(dir string, excludeDirs ...string) int64 {
+	var total int64
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			name := info.Name()
+			for _, ex := range excludeDirs {
+				if name == ex || strings.HasPrefix(name, ex) {
+					return filepath.SkipDir
+				}
+			}
+		} else {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
 
 func CmdEnroll(args []string) {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
@@ -382,11 +404,13 @@ cat ~/.ssh/id_ed25519.pub
 	}
 
 	// 7. Deploy agy-sync Synchronizer Engine
-	fmt.Println("[⚡] Deploying agy-sync synchronizer engine...")
 	targetBinaryData, err := GetOrBuildTargetBinary(arch)
 	if err != nil || len(targetBinaryData) == 0 {
 		targetBinaryData, _ = os.ReadFile(config.AgySyncScript)
 	}
+	binSz := int64(len(targetBinaryData))
+	spinEngine := terminal.NewSpinner(fmt.Sprintf("Deploying agy-sync engine (%s)", terminal.FormatBytes(binSz)), true)
+	spinEngine.Start()
 
 	deployEngineCmd := `
 mkdir -p ~/.gemini/antigravity-cli/bin ~/.local/bin
@@ -403,19 +427,43 @@ fi
 `
 	procEngine := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, deployEngineCmd, true)...)
 	procEngine.Stdin = bytes.NewReader(targetBinaryData)
-	_ = procEngine.Run()
+	if err := procEngine.Run(); err == nil {
+		spinEngine.Stop(fmt.Sprintf("\033[32m✓\033[0m Deploying agy-sync engine... done \033[90m(%s)\033[0m", terminal.FormatBytes(binSz)))
+	} else {
+		spinEngine.Stop(fmt.Sprintf("\033[31m✗\033[0m Deploying agy-sync engine... failed: %v", err))
+	}
 
 	// 8. Deploy agy-sync-go source & agy-pool Multi-Account Engine
 	if _, err := os.Stat(config.AgySyncGoDir); err == nil {
-		fmt.Println("[🐹] Deploying agy-sync-go source repository...")
+		repoSz := getDeployDirSize(config.AgySyncGoDir, "bin", ".git")
+		spinRepo := terminal.NewSpinner(fmt.Sprintf("Deploying agy-sync-go source (%s)", terminal.FormatBytes(repoSz)), true)
+		spinRepo.Start()
+
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
 		p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, "tar -C ~ --no-same-owner -xzf - 2>/dev/null && git -C ~/agy-sync-go checkout . 2>/dev/null", true)...)
-		_ = RunPipedCommands(p1, p2)
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
+			pct := 0.0
+			if repoSz > 0 {
+				pct = (float64(cur) / float64(repoSz)) * 100.0
+				if pct > 100.0 {
+					pct = 100.0
+				}
+			}
+			spinRepo.SetStatus(fmt.Sprintf("Deploying agy-sync-go ↑ [%s/%s (%.0f%%)]", terminal.FormatBytes(cur, true), terminal.FormatBytes(repoSz, true), pct))
+		})
+		if err == nil {
+			spinRepo.Stop(fmt.Sprintf("\033[32m✓\033[0m Deploying agy-sync-go source... done \033[90m(%s)\033[0m", terminal.FormatBytes(nBytes)))
+		} else {
+			spinRepo.Stop(fmt.Sprintf("\033[31m✗\033[0m Deploying agy-sync-go source... failed: %v", err))
+		}
 	}
 
 	if installPool {
 		if _, err := os.Stat(config.PoolDir); err == nil {
-			fmt.Println("[👥] Deploying agy-pool multi-account engine...")
+			poolSz := getDeployDirSize(config.PoolDir, ".git")
+			spinPool := terminal.NewSpinner(fmt.Sprintf("Deploying agy-pool engine (%s)", terminal.FormatBytes(poolSz)), true)
+			spinPool.Start()
+
 			p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=.git", "-czf", "-", "agy-pool")
 			poolSetup := `
 tar -C ~ --no-same-owner -xzf -
@@ -424,7 +472,21 @@ if [ -f ~/agy-pool/install.sh ]; then
 fi
 `
 			p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, poolSetup, true)...)
-			_ = RunPipedCommands(p1, p2)
+			nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
+				pct := 0.0
+				if poolSz > 0 {
+					pct = (float64(cur) / float64(poolSz)) * 100.0
+					if pct > 100.0 {
+						pct = 100.0
+					}
+				}
+				spinPool.SetStatus(fmt.Sprintf("Deploying agy-pool ↑ [%s/%s (%.0f%%)]", terminal.FormatBytes(cur, true), terminal.FormatBytes(poolSz, true), pct))
+			})
+			if err == nil {
+				spinPool.Stop(fmt.Sprintf("\033[32m✓\033[0m Deploying agy-pool engine... done \033[90m(%s)\033[0m", terminal.FormatBytes(nBytes)))
+			} else {
+				spinPool.Stop(fmt.Sprintf("\033[31m✗\033[0m Deploying agy-pool engine... failed: %v", err))
+			}
 		}
 	}
 
@@ -590,7 +652,8 @@ chmod 600 ~/.ssh/authorized_keys
 
 echo "$RESP" | grep "^DEVICES_JSON_B64:" | cut -d: -f2 | base64 -d > ~/.gemini/devices.json
 
-curl -fsSL "http://%s:%d/bin/agy-sync?arch=${ARCH}" -o ~/.gemini/antigravity-cli/bin/agy-sync
+echo "[⚡] Downloading agy-sync synchronizer engine..."
+curl -# -fL "http://%s:%d/bin/agy-sync?arch=${ARCH}" -o ~/.gemini/antigravity-cli/bin/agy-sync
 chmod 755 ~/.gemini/antigravity-cli/bin/agy-sync
 curl -fsSL "http://%s:%d/done" >/dev/null 2>&1 || true
 
@@ -704,7 +767,10 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 		if err != nil || len(binData) == 0 {
 			binData, _ = os.ReadFile(config.AgySyncScript)
 		}
+		clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+		fmt.Printf("[⚡] Streaming agy-sync engine binary (%s, %s) to %s...\n", qArch, terminal.FormatBytes(int64(len(binData))), clientIP)
 		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Length", strconv.Itoa(len(binData)))
 		_, _ = w.Write(binData)
 	})
 

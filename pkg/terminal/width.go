@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strconv"
@@ -156,4 +157,40 @@ func TruncateWidth(s string, maxW int) string {
 		runes = runes[:len(runes)-1]
 	}
 	return string(runes) + "..."
+}
+
+// FormatBytes formats byte counts into human-readable strings (e.g. "12.5 MB" or compact "12.5MB").
+func FormatBytes(b int64, compact ...bool) string {
+	isCompact := len(compact) > 0 && compact[0]
+	const unit = 1024
+	if b <= 0 {
+		if isCompact {
+			return "0B"
+		}
+		return "0 B"
+	}
+	if b < unit {
+		if isCompact {
+			return fmt.Sprintf("%dB", b)
+		}
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	units := []string{"KB", "MB", "GB", "TB"}
+	if exp >= len(units) {
+		exp = len(units) - 1
+	}
+	val := float64(b) / float64(div)
+	sep := " "
+	if isCompact {
+		sep = ""
+	}
+	if val >= 100 {
+		return fmt.Sprintf("%.0f%s%s", val, sep, units[exp])
+	}
+	return fmt.Sprintf("%.1f%s%s", val, sep, units[exp])
 }

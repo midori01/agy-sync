@@ -12,9 +12,10 @@ import (
 
 	"agy-sync/pkg/config"
 	"agy-sync/pkg/ssh"
+	"agy-sync/pkg/terminal"
 )
 
-func SyncConversationSummaries(host string, port int, clockSkew float64, remHome string) string {
+func SyncConversationSummaries(host string, port int, clockSkew float64, remHome string, tracker ...*ByteTracker) string {
 	if _, err := os.Stat(config.SummariesDBFile); err != nil {
 		return "skipped"
 	}
@@ -184,10 +185,23 @@ else:
 
 	cmd := exec.Command("python3", "-c", pyMergeScript)
 	out, err := cmd.Output()
+	resStr := "synced"
 	if err == nil && len(out) > 0 {
-		return strings.TrimSpace(string(out))
+		resStr = strings.TrimSpace(string(out))
 	}
-	return "synced"
+	if len(tracker) > 0 && tracker[0] != nil {
+		if fi, err := os.Stat(config.SummariesDBFile); err == nil && fi.Size() > 0 {
+			if strings.Contains(resStr, "pushed") {
+				tracker[0].AddPush(fi.Size())
+			} else if strings.Contains(resStr, "pulled") {
+				tracker[0].AddPull(fi.Size())
+			} else if strings.Contains(resStr, "merged") {
+				tracker[0].AddPush(fi.Size())
+				tracker[0].AddPull(fi.Size())
+			}
+		}
+	}
+	return resStr
 }
 
 func SafeDBSnapshot(src, dst string) error {
@@ -212,9 +226,15 @@ except Exception:
 	return CopyFile(src, dst)
 }
 
-func SyncConversationDBs(host string, port int, clockSkew float64, remHome string) (int, int) {
+func SyncConversationDBs(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.ConvDir, 0755)
 	localDBs := make(map[string][2]int64)
+
+	reportProgress := func(msg string) {
+		if len(onProgress) > 0 && onProgress[0] != nil {
+			onProgress[0](msg)
+		}
+	}
 
 	entries, err := os.ReadDir(config.ConvDir)
 	if err == nil {
@@ -280,11 +300,26 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 	sort.Strings(toPush)
 	sort.Strings(toPull)
 
+	var totalPushBytes int64
+	for _, dbName := range toPush {
+		if loc, ok := localDBs[dbName]; ok {
+			totalPushBytes += loc[1]
+		}
+	}
+	var totalPullBytes int64
+	for _, dbName := range toPull {
+		if rem, ok := remoteDBs[dbName]; ok {
+			totalPullBytes += rem[1]
+		}
+	}
+
 	pushedCount := 0
 	if len(toPush) > 0 {
 		stagingDir, err := os.MkdirTemp("", "conv_push_*")
 		if err == nil {
 			defer os.RemoveAll(stagingDir)
+
+			reportProgress(fmt.Sprintf("Conv DBs snapshot (%d dbs, %s)...", len(toPush), terminal.FormatBytes(totalPushBytes, true)))
 
 			var validPush []string
 			for _, dbName := range toPush {
@@ -312,8 +347,23 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 
 				sshArgs := ssh.GetSSHCmd(host, port, remoteCmd, true)
 				p2 := exec.Command("ssh", sshArgs...)
-				if err := RunPipedCommands(p1, p2); err == nil {
+
+				reportProgress(fmt.Sprintf("Conv DBs ↑ [%s/%s (0%%)]", terminal.FormatBytes(0, true), terminal.FormatBytes(totalPushBytes, true)))
+				nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
+					pct := 0.0
+					if totalPushBytes > 0 {
+						pct = (float64(cur) / float64(totalPushBytes)) * 100.0
+						if pct > 100.0 {
+							pct = 100.0
+						}
+					}
+					reportProgress(fmt.Sprintf("Conv DBs ↑ [%s/%s (%.0f%%)]", terminal.FormatBytes(cur, true), terminal.FormatBytes(totalPushBytes, true), pct))
+				})
+				if err == nil {
 					pushedCount = len(validPush)
+					if tracker != nil {
+						tracker.AddPush(nBytes)
+					}
 				}
 			}
 		}
@@ -358,8 +408,25 @@ shutil.rmtree(td, ignore_errors=True)
 		p1.Stdin = strings.NewReader(strings.Join(toPull, "\n") + "\n")
 
 		p2 := exec.Command("tar", "-C", config.ConvDir, "--no-same-owner", "-xzf", "-")
-		if err := RunPipedCommands(p1, p2); err == nil {
+
+		reportProgress(fmt.Sprintf("Conv DBs ↓ [%s/%s (0%%)]", terminal.FormatBytes(0, true), terminal.FormatBytes(totalPullBytes, true)))
+		pullProgressCb := func(cur int64) {
+			pct := 0.0
+			if totalPullBytes > 0 {
+				pct = (float64(cur) / float64(totalPullBytes)) * 100.0
+				if pct > 100.0 {
+					pct = 100.0
+				}
+			}
+			reportProgress(fmt.Sprintf("Conv DBs ↓ [%s/%s (%.0f%%)]", terminal.FormatBytes(cur, true), terminal.FormatBytes(totalPullBytes, true), pct))
+		}
+
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2, pullProgressCb)
+		if err == nil {
 			pulledCount = len(toPull)
+			if tracker != nil {
+				tracker.AddPull(nBytes)
+			}
 			for _, d := range toPull {
 				_ = os.Remove(filepath.Join(config.ConvDir, d+"-wal"))
 				_ = os.Remove(filepath.Join(config.ConvDir, d+"-shm"))
@@ -371,8 +438,12 @@ shutil.rmtree(td, ignore_errors=True)
 			fb1 := exec.Command("ssh", fbArgs...)
 			fb1.Stdin = strings.NewReader(inputList)
 			fb2 := exec.Command("tar", "-C", config.ConvDir, "--no-same-owner", "-xzf", "-")
-			if err := RunPipedCommands(fb1, fb2); err == nil {
+			fbBytes, fbErr := RunPipedCommandsWithBytes(fb1, fb2, pullProgressCb)
+			if fbErr == nil {
 				pulledCount = len(toPull)
+				if tracker != nil {
+					tracker.AddPull(fbBytes)
+				}
 				for _, d := range toPull {
 					_ = os.Remove(filepath.Join(config.ConvDir, d+"-wal"))
 					_ = os.Remove(filepath.Join(config.ConvDir, d+"-shm"))
@@ -384,7 +455,7 @@ shutil.rmtree(td, ignore_errors=True)
 	return pushedCount, pulledCount
 }
 
-func SyncAnnotations(host string, port int, clockSkew float64, remHome string) (int, int) {
+func SyncAnnotations(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.AnnDir, 0755)
 	localAnns := make(map[string]int64)
 
@@ -442,8 +513,12 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string) (
 
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remAnn, remAnn), true)
 		p2 := exec.Command("ssh", sshArgs...)
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2)
+		if err == nil {
 			pushed = len(toPush)
+			if tracker != nil {
+				tracker.AddPush(nBytes)
+			}
 		}
 	}
 
@@ -455,15 +530,45 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string) (
 		p1.Stdin = strings.NewReader(inputList)
 
 		p2 := exec.Command("tar", "-C", config.AnnDir, "--no-same-owner", "-xzf", "-")
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2)
+		if err == nil {
 			pulled = len(toPull)
+			if tracker != nil {
+				tracker.AddPull(nBytes)
+			}
 		}
 	}
 
 	return pushed, pulled
 }
 
-func SyncBrainSessions(host string, port int, clockSkew float64, remHome string, onProgress ...func(string)) (int, int) {
+func getSessionDirSize(dir string) int64 {
+	var total int64
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			name := info.Name()
+			if strings.HasPrefix(name, "apktool_out") || strings.HasPrefix(name, "jadx_") ||
+				strings.HasPrefix(name, "mtb_") || strings.HasPrefix(name, "node_modules") ||
+				strings.HasPrefix(name, "build") || strings.HasPrefix(name, "target") ||
+				strings.HasPrefix(name, ".git") {
+				return filepath.SkipDir
+			}
+		} else {
+			name := info.Name()
+			if strings.HasSuffix(name, ".apk") || strings.HasSuffix(name, ".dex") || strings.HasSuffix(name, ".img") {
+				return nil
+			}
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+func SyncBrainSessions(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.BrainDir, 0755)
 	localBrains := make(map[string][2]int64)
 
@@ -575,14 +680,21 @@ if os.path.isdir(b):
 	sort.Strings(toPush)
 	sort.Strings(toPull)
 
+	var totalPushBytes int64
+	for _, id := range toPush {
+		totalPushBytes += getSessionDirSize(filepath.Join(config.BrainDir, id))
+	}
+
+	var totalPullBytes int64
+	for _, id := range toPull {
+		if sz, ok := remoteBrains[id]; ok && sz[1] > 0 {
+			totalPullBytes += sz[1]
+		}
+	}
+
 	pushedCount := 0
 	if len(toPush) > 0 {
-		reportProgress(fmt.Sprintf("Brain push (%d session%s)", len(toPush), func() string {
-			if len(toPush) > 1 {
-				return "s"
-			}
-			return ""
-		}()))
+		reportProgress(fmt.Sprintf("Brain ↑ [%s/%s (0%%)]", terminal.FormatBytes(0, true), terminal.FormatBytes(totalPushBytes, true)))
 		inputList := strings.Join(toPush, "\n") + "\n"
 		tarArgs := []string{
 			"--warning=no-file-changed",
@@ -591,9 +703,17 @@ if os.path.isdir(b):
 			"--exclude=*/scratch/mtb_*",
 			"--exclude=*/scratch/*.apk",
 			"--exclude=*/scratch/*.dex",
+			"--exclude=*/scratch/*.img",
+			"--exclude=*/scratch/*/*.img",
 			"--exclude=*/scratch/node_modules*",
 			"--exclude=*/scratch/build*",
 			"--exclude=*/scratch/target*",
+			"--exclude=*/scratch/*/target*",
+			"--exclude=*/scratch/*/*/target*",
+			"--exclude=*/scratch/*/build*",
+			"--exclude=*/scratch/*/*/build*",
+			"--exclude=*/scratch/.git*",
+			"--exclude=*/scratch/*/.git*",
 			"-C", config.BrainDir,
 			"-czf", "-",
 			"-T", "-",
@@ -603,28 +723,49 @@ if os.path.isdir(b):
 
 		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remBrain, remBrain), true)
 		p2 := exec.Command("ssh", sshArgs...)
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
+			pct := 0.0
+			if totalPushBytes > 0 {
+				pct = (float64(cur) / float64(totalPushBytes)) * 100.0
+				if pct > 100.0 {
+					pct = 100.0
+				}
+			}
+			reportProgress(fmt.Sprintf("Brain ↑ [%s/%s (%.0f%%)]", terminal.FormatBytes(cur, true), terminal.FormatBytes(totalPushBytes, true), pct))
+		})
+		if err == nil {
 			pushedCount = len(toPush)
+			if tracker != nil {
+				tracker.AddPush(nBytes)
+			}
 		}
 	}
 
 	pulledCount := 0
 	if len(toPull) > 0 {
-		reportProgress(fmt.Sprintf("Brain pull (%d session%s)", len(toPull), func() string {
-			if len(toPull) > 1 {
-				return "s"
-			}
-			return ""
-		}()))
+		reportProgress(fmt.Sprintf("Brain ↓ [%s/%s (0%%)]", terminal.FormatBytes(0, true), terminal.FormatBytes(totalPullBytes, true)))
 		inputList := strings.Join(toPull, "\n") + "\n"
-		remTarCmd := fmt.Sprintf("tar --warning=no-file-changed --exclude='*/scratch/apktool_out*' --exclude='*/scratch/jadx_*' --exclude='*/scratch/mtb_*' --exclude='*/scratch/*.apk' --exclude='*/scratch/*.dex' --exclude='*/scratch/node_modules*' --exclude='*/scratch/build*' --exclude='*/scratch/target*' -C '%s' -czf - -T -", remBrain)
+		remTarCmd := fmt.Sprintf("tar --warning=no-file-changed --exclude='*/scratch/apktool_out*' --exclude='*/scratch/jadx_*' --exclude='*/scratch/mtb_*' --exclude='*/scratch/*.apk' --exclude='*/scratch/*.dex' --exclude='*/scratch/*.img' --exclude='*/scratch/*/*.img' --exclude='*/scratch/node_modules*' --exclude='*/scratch/build*' --exclude='*/scratch/target*' --exclude='*/scratch/*/target*' --exclude='*/scratch/*/*/target*' --exclude='*/scratch/*/build*' --exclude='*/scratch/*/*/build*' --exclude='*/scratch/.git*' --exclude='*/scratch/*/.git*' -C '%s' -czf - -T -", remBrain)
 		sshArgs := ssh.GetSSHCmd(host, port, remTarCmd, true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
 		p2 := exec.Command("tar", "-C", config.BrainDir, "--no-same-owner", "-xzf", "-")
-		if err := RunPipedCommands(p1, p2); err == nil {
+		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
+			pct := 0.0
+			if totalPullBytes > 0 {
+				pct = (float64(cur) / float64(totalPullBytes)) * 100.0
+				if pct > 100.0 {
+					pct = 100.0
+				}
+			}
+			reportProgress(fmt.Sprintf("Brain ↓ [%s/%s (%.0f%%)]", terminal.FormatBytes(cur, true), terminal.FormatBytes(totalPullBytes, true), pct))
+		})
+		if err == nil {
 			pulledCount = len(toPull)
+			if tracker != nil {
+				tracker.AddPull(nBytes)
+			}
 		}
 	}
 
