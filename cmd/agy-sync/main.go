@@ -39,6 +39,12 @@ One-Click Automated Deployment & Enrollment:
   agy-sync deploy <target> [alias] [opts]   Alias for enroll
   agy-sync pair [port]                      Start 1-click HTTP pairing server for client
   agy-sync invite [port]                    Alias for pair
+  agy-sync join <url>                       Join an existing cluster via pairing URL
+
+Zero-Touch Lifecycle & Environment:
+  agy-sync init                             Interactive first-run onboarding wizard
+  agy-sync install                          Install agy-sync to canonical path & PATH symlinks
+  agy-sync doctor                           Diagnose agy-cli, Python, sshd, and network dependencies
 
 Alias & Device Management:
   agy-sync alias <old> [new]                Rename alias (omit new to reset to native)
@@ -95,8 +101,9 @@ func main() {
 		// Sync with default peer
 		defAlias, defSSH, defPort := cluster.LoadDefaultTarget()
 		if defAlias == "" && defSSH == "" {
-			fmt.Println("[❌] No default target configured. Set one with: agy-sync device default <alias>")
-			os.Exit(1)
+			// Auto-launch smart onboarding wizard if unconfigured
+			sync.RunSmartWizard()
+			return
 		}
 		targetHost := defSSH
 		if targetHost == "" {
@@ -108,6 +115,21 @@ func main() {
 
 	cmd := args[0]
 	switch cmd {
+	case "init", "setup":
+		sync.RunSmartWizard()
+		return
+	case "install":
+		if err := sync.RunInstall(); err != nil {
+			fmt.Printf("[❌] Installation failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	case "doctor":
+		sync.CmdDoctor()
+		return
+	case "join":
+		sync.CmdJoin(args[1:])
+		return
 	case "help", "-h", "--help":
 		printHelp()
 		return

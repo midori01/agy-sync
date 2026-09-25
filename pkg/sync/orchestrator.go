@@ -286,12 +286,19 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 					regUpdated = true
 				}
 			}
+			// Automatically capture and persist remote Tailscale IP (if detected or contacted over Tailnet)
+			if remTsIP != "" && strings.HasPrefix(remTsIP, "100.") && d.TailscaleIP != remTsIP {
+				d.TailscaleIP = remTsIP
+				regUpdated = true
+			} else if strings.HasPrefix(origHost, "100.") && d.TailscaleIP != origHost {
+				d.TailscaleIP = origHost
+				regUpdated = true
+			}
 			if regUpdated {
 				d.UpdatedAt = float64(time.Now().UnixNano()) / 1e9
 			}
 		}
 	}
-	_ = remTsIP
 	if regUpdated {
 		_ = config.SaveRegistry(registry)
 		cluster.ReconcileRegistry()

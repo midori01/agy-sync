@@ -349,8 +349,29 @@ func ResolveFastestEndpoint(host string, port int, peerName string) (effectiveHo
 		}
 	}
 
+	targetTsIP := ""
+	if peerData != nil && peerData.TailscaleIP != "" {
+		targetTsIP = peerData.TailscaleIP
+	} else if strings.HasPrefix(lookupHost, "100.") {
+		targetTsIP = lookupHost
+	}
+
 	if len(subnetCandidates) == 0 {
-		return defRetHost, port, "Tailnet Mesh", 0.0
+		if targetTsIP != "" {
+			ok, lat, _ := ProbeSSHBanner(targetTsIP, port, 600*time.Millisecond)
+			if ok {
+				effH := targetTsIP
+				if effectiveUser != "" {
+					effH = fmt.Sprintf("%s@%s", effectiveUser, targetTsIP)
+				}
+				return effH, port, "Tailnet Mesh", lat
+			}
+		}
+		tier := "Direct IP"
+		if strings.HasPrefix(lookupHost, "100.") {
+			tier = "Tailnet Mesh"
+		}
+		return defRetHost, port, tier, 0.0
 	}
 
 	// 5. Active probe: Non-blocking SSH banner check
@@ -403,7 +424,23 @@ func ResolveFastestEndpoint(host string, port int, peerName string) (effectiveHo
 		}
 	}
 
-	return defRetHost, port, "Tailnet Mesh", 0.0
+	// If LAN probes failed (e.g. peer changed Wi-Fi or router AP isolation), fallback to Tailnet Mesh
+	if targetTsIP != "" {
+		ok, lat, _ := ProbeSSHBanner(targetTsIP, port, 600*time.Millisecond)
+		if ok {
+			effH := targetTsIP
+			if effectiveUser != "" {
+				effH = fmt.Sprintf("%s@%s", effectiveUser, targetTsIP)
+			}
+			return effH, port, "Tailnet Mesh", lat
+		}
+	}
+
+	tier := "Direct IP"
+	if strings.HasPrefix(lookupHost, "100.") {
+		tier = "Tailnet Mesh"
+	}
+	return defRetHost, port, tier, 0.0
 }
 
 func CmdProbeLAN(target, candIP string, port int) int {

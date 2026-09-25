@@ -48,7 +48,7 @@ var (
 )
 
 var (
-	Version   = "8.8"
+	Version   = "9.0"
 	GitCommit = "dev"
 )
 
@@ -71,6 +71,7 @@ var ReservedAliases = map[string]bool{
 	"push-settings": true, "settings": true, "is-peer": true,
 	"push-pool": true, "push-accounts": true, "pool-push": true,
 	"default": true, "config": true, "save": true, "status": true, "ps": true,
+	"install": true, "init": true, "setup": true, "doctor": true, "join": true,
 }
 
 var (
@@ -127,6 +128,7 @@ type DeviceEntry struct {
 	User         string   `json:"user,omitempty"`
 	LanIps       []string `json:"lan_ips,omitempty"`
 	LanUpdatedAt float64  `json:"lan_updated_at,omitempty"`
+	TailscaleIP  string   `json:"tailscale_ip,omitempty"`
 }
 
 type Registry map[string]*DeviceEntry
@@ -696,6 +698,22 @@ func GetTailscaleIPs() []string {
 		}
 	}
 	return ips
+}
+
+// IsTailnetActiveLocally checks if this device currently has an active Tailnet connection,
+// working seamlessly across native Tailscale CLI, official apps, and userspace sing-box/AsteriskBOX.
+func IsTailnetActiveLocally() bool {
+	if len(GetTailscaleIPs()) > 0 {
+		return true
+	}
+	// Quad-100 MagicDNS internal beacon: 100.100.100.100:53 is reserved exclusively for Tailscale
+	// and is captured by sing-box/AsteriskBOX in-process userspace stack.
+	conn, err := net.DialTimeout("tcp", "100.100.100.100:53", 250*time.Millisecond)
+	if err == nil {
+		_ = conn.Close()
+		return true
+	}
+	return false
 }
 
 func EnsureTermuxEnvironment() {

@@ -584,23 +584,47 @@ func CmdPair(args []string) {
 
 	lanIPs := config.GetLocalLANIPs()
 	tsIPs := config.GetTailscaleIPs()
+	locEp := config.GetLocalEndpoint()
+	_, locHost, _, _ := config.ParseEndpoint(locEp, 8022)
+	if strings.HasPrefix(locHost, "100.") {
+		hasLoc := false
+		for _, tip := range tsIPs {
+			if tip == locHost {
+				hasLoc = true
+				break
+			}
+		}
+		if !hasLoc {
+			tsIPs = append(tsIPs, locHost)
+		}
+	}
 
 	fmt.Printf("\n[Cluster Pairing Service] (Active for %ds)\n", timeout)
-	fmt.Println(strings.Repeat("─", 50))
-	fmt.Println("On your new device (Termux or Linux), run:")
+	fmt.Println(strings.Repeat("─", 58))
+	fmt.Println("👉 Option A — If agy-sync is already present on the new device:")
 	if len(lanIPs) > 0 {
 		for _, lip := range lanIPs {
-			fmt.Printf("\n• Via Local Wi-Fi / LAN (%s):\n", lip)
-			fmt.Printf("  curl -fsSL http://%s:%d/join/%s | bash\n", lip, port, token)
+			fmt.Printf("   • Via LAN/Wi-Fi:   agy-sync join http://%s:%d/join/%s\n", lip, port, token)
 		}
 	}
 	if len(tsIPs) > 0 {
 		for _, tip := range tsIPs {
-			fmt.Printf("\n• Via Tailscale Mesh (%s):\n", tip)
-			fmt.Printf("  curl -fsSL http://%s:%d/join/%s | bash\n", tip, port, token)
+			fmt.Printf("   • Via Tailnet:     agy-sync join http://%s:%d/join/%s\n", tip, port, token)
 		}
 	}
-	fmt.Println("\n" + strings.Repeat("─", 50))
+
+	fmt.Println("\n👉 Option B — Automated 1-line installation for clean/uninstalled devices:")
+	if len(lanIPs) > 0 {
+		for _, lip := range lanIPs {
+			fmt.Printf("   • Via LAN/Wi-Fi:   curl -fsSL http://%s:%d/join/%s | bash\n", lip, port, token)
+		}
+	}
+	if len(tsIPs) > 0 {
+		for _, tip := range tsIPs {
+			fmt.Printf("   • Via Tailnet:     curl -fsSL http://%s:%d/join/%s | bash\n", tip, port, token)
+		}
+	}
+	fmt.Println(strings.Repeat("─", 58))
 	fmt.Println("[⏳] Awaiting connection from new device...")
 
 	mux := http.NewServeMux()
@@ -662,6 +686,15 @@ if [ -d /data/data/com.termux/files/usr/bin ]; then
     ln -sf ~/.gemini/antigravity-cli/bin/agy-sync /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true
 elif [ -w /usr/local/bin ]; then
     ln -sf ~/.gemini/antigravity-cli/bin/agy-sync /usr/local/bin/agy-sync 2>/dev/null || true
+fi
+
+if ! command -v agy >/dev/null 2>&1; then
+    echo "[✨] Installing Antigravity CLI (agy)..."
+    if [ -d "/data/data/com.termux" ]; then
+        curl -fsSL https://raw.githubusercontent.com/wallentx/antigravity-cli-termux/dev/install.sh | bash >/dev/null 2>&1 || true
+    else
+        curl -fsSL https://antigravity.google/cli/install.sh | bash >/dev/null 2>&1 || true
+    fi
 fi
 
 echo "[🎉] Successfully joined Antigravity cluster!"
