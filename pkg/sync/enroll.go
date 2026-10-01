@@ -451,7 +451,7 @@ fi
 		spinRepo := terminal.NewSpinner(fmt.Sprintf("Deploying agy-sync-go source (%s)", terminal.FormatBytes(repoSz)), true)
 		spinRepo.Start()
 
-		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude='*.tmp*'", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
+		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude=*.tmp*", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
 		p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, "tar -C ~ --no-same-owner -xzf - 2>/dev/null && git -C ~/agy-sync-go checkout . 2>/dev/null", true)...)
 		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
 			pct := 0.0

@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"os"
 	"testing"
 )
 
@@ -120,3 +121,36 @@ func TestValidateBinaryArchitecture(t *testing.T) {
 		t.Errorf("expected darwinFat to FAIL for linux/amd64")
 	}
 }
+
+func TestGetSessionDirSizeFilter(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 1. Artifacts & valid logs (should be counted)
+	_ = os.WriteFile(tmpDir+"/artifact.md", []byte("hello world 123"), 0644) // 15 bytes
+	_ = os.MkdirAll(tmpDir+"/.system_generated/logs", 0755)
+	_ = os.WriteFile(tmpDir+"/.system_generated/logs/transcript.jsonl", []byte("{\"step\":1}"), 0644) // 10 bytes
+
+	// 2. Tasks & steps logs (must be SKIPPED)
+	_ = os.MkdirAll(tmpDir+"/.system_generated/tasks", 0755)
+	_ = os.WriteFile(tmpDir+"/.system_generated/tasks/task-1.log", make([]byte, 10000), 0644)
+	_ = os.MkdirAll(tmpDir+"/.system_generated/steps", 0755)
+	_ = os.WriteFile(tmpDir+"/.system_generated/steps/step-1.txt", make([]byte, 10000), 0644)
+
+	// 3. Scratch subdirectories (e.g. ref_repo, cmp_gcc, decompiled) - must be SKIPPED
+	_ = os.MkdirAll(tmpDir+"/scratch/ref_repo/.git", 0755)
+	_ = os.WriteFile(tmpDir+"/scratch/ref_repo/kernel.c", make([]byte, 50000), 0644)
+
+	// 4. Scratch heavy binaries & images - must be SKIPPED
+	_ = os.WriteFile(tmpDir+"/scratch/boot.img", make([]byte, 20000), 0644)
+	_ = os.WriteFile(tmpDir+"/scratch/app.apk", make([]byte, 20000), 0644)
+
+	// 5. Small valid scratch script <= 512KB (should be counted)
+	_ = os.WriteFile(tmpDir+"/scratch/test.py", []byte("print('ok')\n"), 0644) // 12 bytes
+
+	sz := getSessionDirSize(tmpDir)
+	expected := int64(15 + 10 + 12) // 37 bytes
+	if sz != expected {
+		t.Errorf("getSessionDirSize expected %d bytes, got %d", expected, sz)
+	}
+}
+

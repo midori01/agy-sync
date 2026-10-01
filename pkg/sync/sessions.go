@@ -644,16 +644,49 @@ func getSessionDirSize(dir string) int64 {
 		if err != nil {
 			return nil
 		}
+		rel, _ := filepath.Rel(dir, path)
+		parts := strings.Split(filepath.ToSlash(rel), "/")
 		if info.IsDir() {
 			name := info.Name()
+			// Exclude .git directories anywhere inside session
+			if name == ".git" || strings.HasPrefix(name, ".git") {
+				return filepath.SkipDir
+			}
+			// Exclude runtime execution logs & steps in .system_generated
+			if len(parts) >= 2 && parts[0] == ".system_generated" {
+				if parts[1] == "tasks" || parts[1] == "steps" {
+					return filepath.SkipDir
+				}
+			}
+			// Exclude ANY subdirectories under scratch/ (repos, decompiled trees, build outputs)
+			if len(parts) >= 2 && parts[0] == "scratch" {
+				return filepath.SkipDir
+			}
 			if strings.HasPrefix(name, "apktool_out") || strings.HasPrefix(name, "jadx_") ||
 				strings.HasPrefix(name, "mtb_") || strings.HasPrefix(name, "node_modules") ||
-				strings.HasPrefix(name, "build") || strings.HasPrefix(name, "target") ||
-				strings.HasPrefix(name, ".git") {
+				strings.HasPrefix(name, "build") || strings.HasPrefix(name, "target") {
 				return filepath.SkipDir
 			}
 		} else {
-			name := info.Name()
+			// In scratch root, only allow small script/text files <= 512KB and skip binaries/images/archives
+			if len(parts) >= 2 && parts[0] == "scratch" {
+				if len(parts) > 2 || info.Size() > 512*1024 {
+					return nil
+				}
+				name := strings.ToLower(info.Name())
+				if strings.HasSuffix(name, ".img") || strings.HasSuffix(name, ".apk") ||
+					strings.HasSuffix(name, ".dex") || strings.HasSuffix(name, ".so") ||
+					strings.HasSuffix(name, ".a") || strings.HasSuffix(name, ".o") ||
+					strings.HasSuffix(name, ".class") || strings.HasSuffix(name, ".bin") ||
+					strings.HasSuffix(name, ".zip") || strings.HasPrefix(name, ".tar") ||
+					strings.HasSuffix(name, ".tar") || strings.HasSuffix(name, ".gz") ||
+					strings.HasSuffix(name, ".tgz") || strings.HasSuffix(name, ".7z") ||
+					strings.HasSuffix(name, ".iso") || strings.HasSuffix(name, ".log") ||
+					strings.Contains(name, ".tmp") {
+					return nil
+				}
+			}
+			name := strings.ToLower(info.Name())
 			if strings.HasSuffix(name, ".apk") || strings.HasSuffix(name, ".dex") || strings.HasSuffix(name, ".img") {
 				return nil
 			}
@@ -818,22 +851,38 @@ if os.path.isdir(b):
 		inputList := strings.Join(toPush, "\n") + "\n"
 		tarArgs := []string{
 			"--warning=no-file-changed",
+			// 1. Exclude task terminal logs & step execution caches
+			"--exclude=*/.system_generated/tasks*",
+			"--exclude=*/.system_generated/steps*",
+			// 2. Exclude all git repositories inside sessions
+			"--exclude=*/.git*",
+			"--exclude=*/*/.git*",
+			// 3. Exclude any subdirectories under scratch (repos, decompiled trees, build outputs)
+			"--exclude=*/scratch/*/*",
+			"--exclude=*/scratch/.*/*",
+			// 4. Exclude scratch heavy binary, disk images, archives, native libs, logs & temp files
+			"--exclude=*/scratch/*.img",
+			"--exclude=*/scratch/*.apk",
+			"--exclude=*/scratch/*.dex",
+			"--exclude=*/scratch/*.so",
+			"--exclude=*/scratch/*.a",
+			"--exclude=*/scratch/*.o",
+			"--exclude=*/scratch/*.class",
+			"--exclude=*/scratch/*.bin",
+			"--exclude=*/scratch/*.zip",
+			"--exclude=*/scratch/*.tar*",
+			"--exclude=*/scratch/*.gz",
+			"--exclude=*/scratch/*.tgz",
+			"--exclude=*/scratch/*.7z",
+			"--exclude=*/scratch/*.iso",
+			"--exclude=*/scratch/*.log",
+			"--exclude=*/scratch/*.tmp*",
 			"--exclude=*/scratch/apktool_out*",
 			"--exclude=*/scratch/jadx_*",
 			"--exclude=*/scratch/mtb_*",
-			"--exclude=*/scratch/*.apk",
-			"--exclude=*/scratch/*.dex",
-			"--exclude=*/scratch/*.img",
-			"--exclude=*/scratch/*/*.img",
 			"--exclude=*/scratch/node_modules*",
 			"--exclude=*/scratch/build*",
 			"--exclude=*/scratch/target*",
-			"--exclude=*/scratch/*/target*",
-			"--exclude=*/scratch/*/*/target*",
-			"--exclude=*/scratch/*/build*",
-			"--exclude=*/scratch/*/*/build*",
-			"--exclude=*/scratch/.git*",
-			"--exclude=*/scratch/*/.git*",
 			"-C", config.BrainDir,
 			"-czf", "-",
 			"-T", "-",
@@ -865,7 +914,39 @@ if os.path.isdir(b):
 	if len(toPull) > 0 {
 		reportProgress(fmt.Sprintf("Brain ↓ [%s/%s (0%%)]", terminal.FormatBytes(0, true), terminal.FormatBytes(totalPullBytes, true)))
 		inputList := strings.Join(toPull, "\n") + "\n"
-		remTarCmd := fmt.Sprintf("tar --warning=no-file-changed --exclude='*/scratch/apktool_out*' --exclude='*/scratch/jadx_*' --exclude='*/scratch/mtb_*' --exclude='*/scratch/*.apk' --exclude='*/scratch/*.dex' --exclude='*/scratch/*.img' --exclude='*/scratch/*/*.img' --exclude='*/scratch/node_modules*' --exclude='*/scratch/build*' --exclude='*/scratch/target*' --exclude='*/scratch/*/target*' --exclude='*/scratch/*/*/target*' --exclude='*/scratch/*/build*' --exclude='*/scratch/*/*/build*' --exclude='*/scratch/.git*' --exclude='*/scratch/*/.git*' -C '%s' -czf - -T -", remBrain)
+		remTarCmd := fmt.Sprintf(
+			"tar --warning=no-file-changed "+
+				"--exclude='*/.system_generated/tasks*' "+
+				"--exclude='*/.system_generated/steps*' "+
+				"--exclude='*/.git*' "+
+				"--exclude='*/*/.git*' "+
+				"--exclude='*/scratch/*/*' "+
+				"--exclude='*/scratch/.*/*' "+
+				"--exclude='*/scratch/*.img' "+
+				"--exclude='*/scratch/*.apk' "+
+				"--exclude='*/scratch/*.dex' "+
+				"--exclude='*/scratch/*.so' "+
+				"--exclude='*/scratch/*.a' "+
+				"--exclude='*/scratch/*.o' "+
+				"--exclude='*/scratch/*.class' "+
+				"--exclude='*/scratch/*.bin' "+
+				"--exclude='*/scratch/*.zip' "+
+				"--exclude='*/scratch/*.tar*' "+
+				"--exclude='*/scratch/*.gz' "+
+				"--exclude='*/scratch/*.tgz' "+
+				"--exclude='*/scratch/*.7z' "+
+				"--exclude='*/scratch/*.iso' "+
+				"--exclude='*/scratch/*.log' "+
+				"--exclude='*/scratch/*.tmp*' "+
+				"--exclude='*/scratch/apktool_out*' "+
+				"--exclude='*/scratch/jadx_*' "+
+				"--exclude='*/scratch/mtb_*' "+
+				"--exclude='*/scratch/node_modules*' "+
+				"--exclude='*/scratch/build*' "+
+				"--exclude='*/scratch/target*' "+
+				"-C '%s' -czf - -T -",
+			remBrain,
+		)
 		sshArgs := ssh.GetSSHCmd(host, port, remTarCmd, true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
