@@ -336,6 +336,16 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 		config.ToRemotePath(config.ProtoSummariesFile, remHome),
 		config.ToRemotePath(config.HistoryFile, remHome),
 		config.ToRemotePath(filepath.Join(config.PoolDir, "bin", "agy-pool"), remHome),
+		config.ToRemotePath(config.CustomSyncFile, remHome),
+	}
+	// Append active custom single files into 1-RTT probe cache
+	for _, cItem := range config.LoadCustomSyncRegistry() {
+		if !cItem.Deleted && cItem.Type != "dir" {
+			locP := filepath.Join(config.HomeDir, cItem.Path)
+			if fi, err := os.Stat(locP); err == nil && !fi.IsDir() {
+				batchTargets = append(batchTargets, config.ToRemotePath(locP, remHome))
+			}
+		}
 	}
 	probeCache := BatchProbeRemoteFiles(host, port, batchTargets)
 
@@ -518,6 +528,47 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 		cfgDesc = fmt.Sprintf("+%d pushed, +%d pulled", cfgPushed, cfgPulled)
 	}
 	recordAsset("Skills & Configs", cfgDesc, "🧰", cfgChanged)
+
+	// 11. Sync Custom Files & Directories
+	stepStatus("Custom sync items")
+	activeCustomItems, custRegStat := SyncCustomSyncRegistry(host, port, clockSkew, remHome, tracker)
+	if custRegStat == "pushed" || custRegStat == "pulled" || strings.Contains(custRegStat, "merged") {
+		recordAsset("Custom Registry", custRegStat, "📋", true)
+	}
+
+	for _, cItem := range activeCustomItems {
+		locPath := filepath.Join(config.HomeDir, cItem.Path)
+		remPath := config.ToRemotePath(locPath, remHome)
+
+		isDir := (cItem.Type == "dir")
+		if fi, err := os.Stat(locPath); err == nil {
+			isDir = fi.IsDir()
+		} else {
+			checkCmd := fmt.Sprintf("if [ -d '%s' ]; then echo DIR; elif [ -f '%s' ]; then echo FILE; else echo NONE; fi", remPath, remPath)
+			stdout, _, _, _ := ssh.RunSSHCmd(host, port, checkCmd, false)
+			stdout = strings.TrimSpace(stdout)
+			if stdout == "DIR" {
+				isDir = true
+			} else if stdout == "FILE" {
+				isDir = false
+			}
+		}
+
+		dispName := fmt.Sprintf("Custom: ~/%s", cItem.Path)
+		if isDir {
+			pushed, pulled, err := SyncCustomDirectory(cItem.Path, host, port, clockSkew, remHome, tracker, stepStatus)
+			if err != nil {
+				recordAsset(dispName, fmt.Sprintf("failed: %v", err), "📁", false)
+			} else if pushed > 0 || pulled > 0 {
+				recordAsset(dispName, fmt.Sprintf("+%d pushed, +%d pulled", pushed, pulled), "📁", true)
+			} else {
+				recordAsset(dispName, "identical", "📁", false)
+			}
+		} else {
+			fStat := SyncSingleFile(locPath, remPath, host, port, cItem.Path, clockSkew, probeCache, tracker)
+			recordAsset(dispName, fStat, "📄", fStat == "pushed" || fStat == "pulled")
+		}
+	}
 
 	stepStatus("Finalizing")
 	elapsed := math.Round(time.Since(t0).Seconds()*100) / 100.0

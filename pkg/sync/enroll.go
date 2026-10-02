@@ -695,6 +695,8 @@ chmod 600 ~/.ssh/authorized_keys
 
 echo "$RESP" | grep "^DEVICES_JSON_B64:" | cut -d: -f2 | base64 -d > ~/.gemini/devices.json
 
+echo "$RESP" | grep "^CUSTOM_SYNC_B64:" | cut -d: -f2 | base64 -d > ~/.gemini/custom_sync.json 2>/dev/null || true
+
 echo "[⚡] Downloading agy-sync synchronizer engine..."
 curl -# -fL "http://%s:%d/bin/agy-sync?arch=${ARCH}" -o ~/.gemini/antigravity-cli/bin/agy-sync 2>/dev/null || true
 curl -fsSL "http://%s:%d/done" >/dev/null 2>&1 || true
@@ -824,7 +826,13 @@ echo "[🎉] Successfully joined Antigravity cluster!"
 			regData, _ := os.ReadFile(config.DevicesJSONFile)
 			regB64 := base64.StdEncoding.EncodeToString(regData)
 
-			resp := fmt.Sprintf("HOST_PUBKEY:%s\nALL_KEYS_B64:%s\nDEVICES_JSON_B64:%s\nASSIGNED_ALIAS:%s\n", localPubkey, allKeysB64, regB64, alias)
+			customData, _ := os.ReadFile(config.CustomSyncFile)
+			customB64 := ""
+			if len(customData) > 0 {
+				customB64 = base64.StdEncoding.EncodeToString(customData)
+			}
+
+			resp := fmt.Sprintf("HOST_PUBKEY:%s\nALL_KEYS_B64:%s\nDEVICES_JSON_B64:%s\nCUSTOM_SYNC_B64:%s\nASSIGNED_ALIAS:%s\n", localPubkey, allKeysB64, regB64, customB64, alias)
 			w.Header().Set("Content-Type", "text/plain")
 			_, _ = w.Write([]byte(resp))
 		}

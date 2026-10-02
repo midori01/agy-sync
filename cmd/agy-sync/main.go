@@ -35,6 +35,13 @@ Basic Usage:
   agy-sync items                            Display tracked assets manifest
   agy-sync devices                          List enrolled devices, ping, status & hardware
 
+Custom Sync (Under $HOME):
+  agy-sync custom [list]                    List custom synchronized files & directories
+  agy-sync custom add <path>                Add file or directory under $HOME to sync list
+  agy-sync custom remove <path>             Remove file or directory from sync list
+  agy-sync custom clear                     Clear all custom sync items
+  agy-sync add <path> / rm <path>           Short aliases for custom add / remove
+
 One-Click Automated Deployment & Enrollment:
   agy-sync enroll <target> [alias] [opts]   Zero-touch auto-deploy to remote SSH host
   agy-sync deploy <target> [alias] [opts]   Alias for enroll
@@ -130,6 +137,15 @@ func main() {
 		return
 	case "join":
 		sync.CmdJoin(args[1:])
+		return
+	case "custom", "custom-sync":
+		sync.CmdCustom(args[1:])
+		return
+	case "add":
+		sync.CmdCustom(append([]string{"add"}, args[1:]...))
+		return
+	case "rm", "remove":
+		sync.CmdCustom(append([]string{"rm"}, args[1:]...))
 		return
 	case "help", "-h", "--help":
 		printHelp()

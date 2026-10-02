@@ -1,9 +1,12 @@
 package sync
 
 import (
+	"bytes"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -37,7 +40,7 @@ func (cr *progressCountingReader) Total() int64 {
 // RunPipedCommandsWithBytes executes producer and consumer connected via an OS pipe safely,
 // tracking total bytes transferred and streaming real-time progress callbacks.
 func RunPipedCommandsWithBytes(producer *exec.Cmd, consumer *exec.Cmd, onProgress ...PipeProgressFunc) (int64, error) {
-	pipe, err := producer.StdoutPipe()
+	r, w, err := os.Pipe()
 	if err != nil {
 		return 0, err
 	}
@@ -48,20 +51,34 @@ func RunPipedCommandsWithBytes(producer *exec.Cmd, consumer *exec.Cmd, onProgres
 	}
 
 	cr := &progressCountingReader{
-		reader:     pipe,
+		reader:     r,
 		onProgress: progressCb,
 	}
+	producer.Stdout = w
 	consumer.Stdin = cr
 
+	var prodErrBuf, consErrBuf bytes.Buffer
+	if producer.Stderr == nil {
+		producer.Stderr = &prodErrBuf
+	}
+	if consumer.Stderr == nil {
+		consumer.Stderr = &consErrBuf
+	}
+
 	if err := producer.Start(); err != nil {
-		_ = pipe.Close()
+		_ = w.Close()
+		_ = r.Close()
 		return 0, err
 	}
+	// Close write end in parent process so only the producer holds the write descriptor.
+	// When producer exits, the OS closes producer's fd, allowing reader to read until clean EOF.
+	_ = w.Close()
+
 	if err := consumer.Start(); err != nil {
 		if producer.Process != nil {
 			_ = producer.Process.Kill()
 		}
-		_ = pipe.Close()
+		_ = r.Close()
 		_ = producer.Wait()
 		return 0, err
 	}
@@ -85,40 +102,48 @@ func RunPipedCommandsWithBytes(producer *exec.Cmd, consumer *exec.Cmd, onProgres
 		case err := <-prodChan:
 			producerErr = err
 			prodDone = true
-			if err != nil {
-				// Producer failed or terminated: terminate consumer to prevent hanging on pipe
-				_ = pipe.Close()
-				if consumer.Process != nil {
-					_ = consumer.Process.Kill()
-				}
-			}
+			// When producer finishes, its write fd is closed.
+			// Consumer will naturally read remaining bytes from pipe buffer until EOF.
+			// Do NOT kill consumer or close r prematurely.
 		case err := <-consChan:
 			consumerErr = err
 			consDone = true
-			// Consumer terminated: close pipe so producer receives EPIPE if still writing
-			_ = pipe.Close()
-			if err != nil {
-				// Consumer failed: terminate producer to prevent hanging on writing to full pipe
+			// Consumer finished. Close r so producer receives EPIPE if still writing.
+			_ = r.Close()
+			if err != nil && !prodDone {
+				// Consumer failed early: terminate producer to avoid leaking resources.
 				if producer.Process != nil {
 					_ = producer.Process.Kill()
 				}
 			}
 		}
 	}
-	_ = pipe.Close()
+	_ = r.Close()
 
 	if progressCb != nil {
 		progressCb(cr.Total())
 	}
 
 	if consumerErr != nil && producerErr != nil {
-		return cr.Total(), fmt.Errorf("consumer: %v; producer: %v", consumerErr, producerErr)
+		return cr.Total(), fmt.Errorf("consumer: %v (%s); producer: %v (%s)",
+			consumerErr, strings.TrimSpace(consErrBuf.String()),
+			producerErr, strings.TrimSpace(prodErrBuf.String()))
 	}
 	if consumerErr != nil {
+		msg := strings.TrimSpace(consErrBuf.String())
+		if msg != "" {
+			return cr.Total(), fmt.Errorf("%v: %s", consumerErr, msg)
+		}
 		return cr.Total(), consumerErr
 	}
-	// When consumer succeeds (exit code 0), all transferred data was verified and unpacked.
-	// Producer may exit with SIGPIPE or broken pipe due to pipe closure, which is completely benign.
+	if producerErr != nil {
+		msg := strings.TrimSpace(prodErrBuf.String())
+		if msg != "" {
+			return cr.Total(), fmt.Errorf("producer: %v (%s)", producerErr, msg)
+		}
+		return cr.Total(), producerErr
+	}
+
 	return cr.Total(), nil
 }
 

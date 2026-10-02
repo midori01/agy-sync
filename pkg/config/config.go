@@ -45,10 +45,11 @@ var (
 	PoolDir             string
 	AgySyncGoDir        string
 	SocketDir           string
+	CustomSyncFile      string
 )
 
 var (
-	Version   = "9.1"
+	Version   = "9.2"
 	GitCommit = "dev"
 )
 
@@ -72,6 +73,7 @@ var ReservedAliases = map[string]bool{
 	"push-pool": true, "push-accounts": true, "pool-push": true,
 	"default": true, "config": true, "save": true, "status": true, "ps": true,
 	"install": true, "init": true, "setup": true, "doctor": true, "join": true,
+	"custom": true, "custom-sync": true, "add": true, "remove": true, "rm": true,
 }
 
 var (
@@ -113,6 +115,7 @@ func init() {
 	PoolDir = filepath.Join(HomeDir, "agy-pool")
 	AgySyncGoDir = filepath.Join(HomeDir, "agy-sync-go")
 	SocketDir = filepath.Join(HomeDir, ".ssh", "sockets")
+	CustomSyncFile = filepath.Join(GeminiDir, "custom_sync.json")
 
 	_ = os.MkdirAll(SocketDir, 0700)
 	_ = os.Chmod(SocketDir, 0700)

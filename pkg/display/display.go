@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/user"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -527,6 +528,31 @@ func ShowItems(verbose ...bool) {
 		{"📝 Prompt History", config.HistoryFile, "Chrono Union"},
 		{"🧰 Custom Skills/Configs", config.ConfigDir, "Full-Duplex Tar"},
 	}...)
+
+	customReg := config.LoadCustomSyncRegistry()
+	var activeCustom []*config.CustomItem
+	for _, it := range customReg {
+		if !it.Deleted {
+			activeCustom = append(activeCustom, it)
+		}
+	}
+	sort.Slice(activeCustom, func(i, j int) bool {
+		return activeCustom[i].Path < activeCustom[j].Path
+	})
+	for _, it := range activeCustom {
+		icon := "📄"
+		eng := "Custom File (SHA-256)"
+		if it.Type == "dir" {
+			icon = "📁"
+			eng = "Custom Dir (Tar Mesh)"
+		}
+		locP := filepath.Join(config.HomeDir, it.Path)
+		items = append(items, manifestItem{
+			Name:   fmt.Sprintf("%s Custom: ~/%s", icon, it.Path),
+			Path:   locP,
+			Engine: eng,
+		})
+	}
 
 	colWidths := []int{24, 27, 13}
 	termW := terminal.GetTerminalWidth()

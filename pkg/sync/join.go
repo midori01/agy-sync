@@ -124,9 +124,10 @@ Examples:
 	}
 	respStr := string(bodyBytes)
 
-	// 4. Parse & save authorized_keys and devices.json
+	// 4. Parse & save authorized_keys, devices.json, and custom_sync.json
 	var authKeysData []byte
 	var devicesJSONData []byte
+	var customSyncData []byte
 
 	for _, line := range strings.Split(respStr, "\n") {
 		if strings.HasPrefix(line, "ALL_KEYS_B64:") {
@@ -135,6 +136,9 @@ Examples:
 		} else if strings.HasPrefix(line, "DEVICES_JSON_B64:") {
 			rawB64 := strings.TrimPrefix(line, "DEVICES_JSON_B64:")
 			devicesJSONData, _ = base64.StdEncoding.DecodeString(rawB64)
+		} else if strings.HasPrefix(line, "CUSTOM_SYNC_B64:") {
+			rawB64 := strings.TrimPrefix(line, "CUSTOM_SYNC_B64:")
+			customSyncData, _ = base64.StdEncoding.DecodeString(rawB64)
 		}
 	}
 
@@ -148,6 +152,12 @@ Examples:
 		_ = os.MkdirAll(filepath.Dir(config.DevicesJSONFile), 0755)
 		_ = config.WriteFileAtomic(config.DevicesJSONFile, devicesJSONData, 0644)
 		fmt.Println("[🪪] Updated cluster topology devices registry.")
+	}
+
+	if len(customSyncData) > 0 {
+		_ = os.MkdirAll(filepath.Dir(config.CustomSyncFile), 0755)
+		_ = config.WriteFileAtomic(config.CustomSyncFile, customSyncData, 0644)
+		fmt.Println("[📋] Synchronized custom sync configuration registry.")
 	}
 
 	// 5. Check if peer address is Tailscale IP (100.x.y.z) and record it
