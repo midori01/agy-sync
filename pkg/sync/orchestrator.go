@@ -328,6 +328,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 		config.ToRemotePath(config.RulesFile, remHome),
 		config.ToRemotePath(config.HandoffFile, remHome),
 		config.ToRemotePath(config.SummariesDBFile, remHome),
+		config.ToRemotePath(config.SummariesDBFile+"-wal", remHome),
 		config.ToRemotePath(config.DevicesJSONFile, remHome),
 		config.ToRemotePath(config.AuthKeysFile, remHome),
 		config.ToRemotePath(config.OAuthTokenFile, remHome),

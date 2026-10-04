@@ -68,8 +68,12 @@ func SyncConversationSummaries(host string, port int, clockSkew float64, remHome
 		remDB = config.ToRemotePath(config.SummariesDBFile, remHome)
 	}
 
-	// Fast-path: 0-RTT short circuit if probeCache confirmed identical size/mtime or SHA256
-	if probeCache != nil && probeCache[remDB] != nil {
+	locWalFI, locWalErr := os.Stat(config.SummariesDBFile + "-wal")
+	locHasWal := locWalErr == nil && locWalFI.Size() > 0
+	remHasWal := probeCache != nil && probeCache[remDB+"-wal"] != nil && probeCache[remDB+"-wal"].Size > 0
+
+	// Fast-path: 0-RTT short circuit if probeCache confirmed identical size/mtime or SHA256 (and NO pending WALs)
+	if !locHasWal && !remHasWal && probeCache != nil && probeCache[remDB] != nil {
 		cached := probeCache[remDB]
 		locSize := fi.Size()
 		locMTime := fi.ModTime().Unix()
