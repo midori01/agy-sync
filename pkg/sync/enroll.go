@@ -445,14 +445,14 @@ fi
 		}
 	}
 
-	// 8. Deploy agy-sync-go source & agy-pool Multi-Account Engine
+	// 8. Deploy agy-sync source & agy-pool Multi-Account Engine
 	if _, err := os.Stat(config.AgySyncGoDir); err == nil {
 		repoSz := getDeployDirSize(config.AgySyncGoDir, "bin", ".git")
-		spinRepo := terminal.NewSpinner(fmt.Sprintf("Deploying agy-sync-go source (%s)", terminal.FormatBytes(repoSz)), true)
+		spinRepo := terminal.NewSpinner(fmt.Sprintf("Deploying agy-sync source (%s)", terminal.FormatBytes(repoSz)), true)
 		spinRepo.Start()
 
-		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude=*.tmp*", "--exclude=.git/index.lock", "-czf", "-", "agy-sync-go")
-		p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, "tar -C ~ --no-same-owner -xzf - 2>/dev/null && git -C ~/agy-sync-go checkout . 2>/dev/null", true)...)
+		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude=*.tmp*", "--exclude=.git/index.lock", "-czf", "-", "agy-sync")
+		p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, "tar -C ~ --no-same-owner -xzf - 2>/dev/null && git -C ~/agy-sync checkout . 2>/dev/null", true)...)
 		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
 			pct := 0.0
 			if repoSz > 0 {
@@ -461,12 +461,12 @@ fi
 					pct = 100.0
 				}
 			}
-			spinRepo.SetStatus(fmt.Sprintf("Deploying agy-sync-go ↑ [%s/%s (%.0f%%)]", terminal.FormatBytes(cur, true), terminal.FormatBytes(repoSz, true), pct))
+			spinRepo.SetStatus(fmt.Sprintf("Deploying agy-sync ↑ [%s/%s (%.0f%%)]", terminal.FormatBytes(cur, true), terminal.FormatBytes(repoSz, true), pct))
 		})
 		if err == nil {
-			spinRepo.Stop(fmt.Sprintf("\033[32m✓\033[0m Deploying agy-sync-go source... done \033[90m(%s)\033[0m", terminal.FormatBytes(nBytes)))
+			spinRepo.Stop(fmt.Sprintf("\033[32m✓\033[0m Deploying agy-sync source... done \033[90m(%s)\033[0m", terminal.FormatBytes(nBytes)))
 		} else {
-			spinRepo.Stop(fmt.Sprintf("\033[31m✗\033[0m Deploying agy-sync-go source... failed: %v", err))
+			spinRepo.Stop(fmt.Sprintf("\033[31m✗\033[0m Deploying agy-sync source... failed: %v", err))
 		}
 	}
 

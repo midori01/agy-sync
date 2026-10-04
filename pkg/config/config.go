@@ -49,7 +49,7 @@ var (
 )
 
 var (
-	Version   = "9.2"
+	Version   = "9.3"
 	GitCommit = "dev"
 )
 
@@ -113,7 +113,7 @@ func init() {
 	OAuthTokenFile = filepath.Join(CliDir, "antigravity-oauth-token")
 	PoolAccountsFile = filepath.Join(GeminiDir, "agy-pool-accounts.json")
 	PoolDir = filepath.Join(HomeDir, "agy-pool")
-	AgySyncGoDir = filepath.Join(HomeDir, "agy-sync-go")
+	AgySyncGoDir = filepath.Join(HomeDir, "agy-sync")
 	SocketDir = filepath.Join(HomeDir, ".ssh", "sockets")
 	CustomSyncFile = filepath.Join(GeminiDir, "custom_sync.json")
 

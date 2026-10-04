@@ -84,7 +84,7 @@ func NormalizeCustomPath(rawPath string) (relPath string, isDir bool, err error)
 	if lowerRel == "agy-pool" || strings.HasPrefix(lowerRel, "agy-pool/") {
 		return "", false, fmt.Errorf("path '~/%s' is already synchronized as account pool engine", rel)
 	}
-	if lowerRel == "agy-sync-go" || strings.HasPrefix(lowerRel, "agy-sync-go/") {
+	if lowerRel == "agy-sync" || strings.HasPrefix(lowerRel, "agy-sync/") {
 		return "", false, fmt.Errorf("path '~/%s' is already synchronized as synchronizer engine source", rel)
 	}
 

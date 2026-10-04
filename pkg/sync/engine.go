@@ -129,7 +129,7 @@ func GetOrBuildTargetBinary(targetOSAndArch ...string) ([]byte, error) {
 		}
 	}
 
-	// 3. Check repository cache in ~/agy-sync-go/bin/agy-sync-<os>-<arch>
+	// 3. Check repository cache in ~/agy-sync/bin/agy-sync-<os>-<arch>
 	cachedBin := filepath.Join(config.AgySyncGoDir, "bin", fmt.Sprintf("agy-sync-%s-%s", normOS, normArch))
 	stampFile := cachedBin + ".commit"
 	if stamp, err := os.ReadFile(stampFile); err == nil && strings.TrimSpace(string(stamp)) == config.GitCommit && config.GitCommit != "dev" {
@@ -194,7 +194,7 @@ func PullRemoteBinaryForLocal(host string, port int, remHome string, remOS strin
 	}
 
 	// 2. Request remote node (which has Go or cache) to supply local's binary
-	remGoDir := fmt.Sprintf("%s/agy-sync-go", remHome)
+	remGoDir := fmt.Sprintf("%s/agy-sync", remHome)
 	pullCmd := fmt.Sprintf(`
 cached="%s/bin/agy-sync-%s-%s"
 if [ -f "$cached" ] && [ -f "$cached.commit" ] && [ "$(cat "$cached.commit" 2>/dev/null)" = "%s" ]; then
@@ -325,7 +325,7 @@ func SyncEngine(host string, port int, remHome string, remArch string, remCommit
 	targetContent, err := GetOrBuildTargetBinary(normRemOS, remArch)
 	if err != nil || len(targetContent) == 0 {
 		// Local has no Go compiler to cross-compile: ask remote to build for itself if remote has Go!
-		remGoDir := fmt.Sprintf("%s/agy-sync-go", remHome)
+		remGoDir := fmt.Sprintf("%s/agy-sync", remHome)
 		remBuildCmd := fmt.Sprintf(`%s if command -v go >/dev/null 2>&1 && [ -d '%s' ]; then (cd '%s' && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X agy-sync/pkg/config.GitCommit=%s" -o '%s' ./cmd/agy-sync 2>/dev/null && echo BUILT || echo FAILED); else echo NO_GO; fi`, config.PathPrefix, remGoDir, remGoDir, config.GitCommit, remBin)
 		stdout, _, _, _ := ssh.RunSSHCmd(host, port, remBuildCmd, false)
 		if strings.Contains(stdout, "BUILT") {
