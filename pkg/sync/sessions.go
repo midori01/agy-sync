@@ -329,7 +329,10 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 	if remoteDBs == nil {
 		remoteDBs = make(map[string][2]int64)
 		statCmd := fmt.Sprintf("mkdir -p '%s' && (if stat -c '%%n' /dev/null >/dev/null 2>&1; then stat -c '%%n %%Y %%s' '%s'/*.db; else stat -f '%%N %%m %%z' '%s'/*.db; fi) 2>/dev/null", remConv, remConv, remConv)
-		stdout, _, _, _ := ssh.RunSSHCmd(host, port, statCmd, false)
+		stdout, _, exitCode, err := ssh.RunSSHCmd(host, port, statCmd, false)
+		if err != nil && exitCode == 255 {
+			return 0, 0
+		}
 
 		for _, line := range strings.Split(stdout, "\n") {
 			parts := strings.Fields(line)
@@ -553,7 +556,10 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string, t
 	if remoteAnns == nil {
 		remoteAnns = make(map[string]int64)
 		cmdStr := fmt.Sprintf("mkdir -p '%s' && (if stat -c '%%n' /dev/null >/dev/null 2>&1; then stat -c '%%n %%Y' '%s'/*.pbtxt; else stat -f '%%N %%m' '%s'/*.pbtxt; fi) 2>/dev/null", remAnn, remAnn, remAnn)
-		stdout, _, _, _ := ssh.RunSSHCmd(host, port, cmdStr, false)
+		stdout, _, exitCode, err := ssh.RunSSHCmd(host, port, cmdStr, false)
+		if err != nil && exitCode == 255 {
+			return 0, 0
+		}
 
 		for _, line := range strings.Split(stdout, "\n") {
 			parts := strings.Fields(line)
@@ -737,7 +743,10 @@ func SyncBrainSessions(host string, port int, clockSkew float64, remHome string,
 			"mkdir -p '%s' && if stat -c '%%n' /dev/null >/dev/null 2>&1; then (stat -c '%%n\t%%Y\t%%s' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -c '%%n\t%%Y\t0' '%s'/*/ 2>/dev/null); else (stat -f '%%N\t%%m\t%%z' '%s'/*/.system_generated/logs/transcript.jsonl 2>/dev/null; stat -f '%%N\t%%m\t0' '%s'/*/ 2>/dev/null); fi",
 			remBrain, remBrain, remBrain, remBrain, remBrain,
 		)
-		stdout, _, _, _ := ssh.RunSSHCmd(host, port, statCmd, false)
+		stdout, _, exitCode, err := ssh.RunSSHCmd(host, port, statCmd, false)
+		if err != nil && exitCode == 255 {
+			return 0, 0
+		}
 		remoteBrains = make(map[string][2]int64)
 
 		for _, line := range strings.Split(stdout, "\n") {
