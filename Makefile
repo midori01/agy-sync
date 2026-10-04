@@ -33,10 +33,10 @@ all-platforms: linux-arm64 linux-amd64 darwin-arm64 darwin-amd64
 install: all all-platforms
 	mkdir -p $(BINDIR)
 	cp -f bin/agy-sync $(BINDIR)/agy-sync
-	@if [ -f bin/agy-sync-linux-arm64 ]; then cp -f bin/agy-sync-linux-arm64 $(BINDIR)/agy-sync-linux-arm64; fi
-	@if [ -f bin/agy-sync-linux-amd64 ]; then cp -f bin/agy-sync-linux-amd64 $(BINDIR)/agy-sync-linux-amd64; fi
-	@if [ -f bin/agy-sync-darwin-arm64 ]; then cp -f bin/agy-sync-darwin-arm64 $(BINDIR)/agy-sync-darwin-arm64; fi
-	@if [ -f bin/agy-sync-darwin-amd64 ]; then cp -f bin/agy-sync-darwin-amd64 $(BINDIR)/agy-sync-darwin-amd64; fi
+	@if [ -f bin/agy-sync-linux-arm64 ]; then cp -f bin/agy-sync-linux-arm64* $(BINDIR)/; fi
+	@if [ -f bin/agy-sync-linux-amd64 ]; then cp -f bin/agy-sync-linux-amd64* $(BINDIR)/; fi
+	@if [ -f bin/agy-sync-darwin-arm64 ]; then cp -f bin/agy-sync-darwin-arm64* $(BINDIR)/; fi
+	@if [ -f bin/agy-sync-darwin-amd64 ]; then cp -f bin/agy-sync-darwin-amd64* $(BINDIR)/; fi
 	chmod 755 $(BINDIR)/agy-sync*
 	@if [ -d /data/data/com.termux/files/usr/bin ]; then ln -sf $(BINDIR)/agy-sync /data/data/com.termux/files/usr/bin/agy-sync 2>/dev/null || true; fi
 	@mkdir -p $(HOME)/.local/bin && ln -sf $(BINDIR)/agy-sync $(HOME)/.local/bin/agy-sync 2>/dev/null || true

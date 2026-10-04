@@ -123,9 +123,12 @@ func GetOrBuildTargetBinary(targetOSAndArch ...string) ([]byte, error) {
 
 	// 2. Check canonical directory companion binary (~/.gemini/antigravity-cli/bin/agy-sync-<os>-<arch>)
 	companionBin := filepath.Join(filepath.Dir(config.AgySyncScript), fmt.Sprintf("agy-sync-%s-%s", normOS, normArch))
-	if data, err := os.ReadFile(companionBin); err == nil && len(data) > 0 {
-		if ValidateBinaryArchitecture(data, normOS, normArch) {
-			return data, nil
+	companionStamp := companionBin + ".commit"
+	if stamp, err := os.ReadFile(companionStamp); err == nil && strings.TrimSpace(string(stamp)) == config.GitCommit && config.GitCommit != "dev" {
+		if data, err := os.ReadFile(companionBin); err == nil && len(data) > 0 {
+			if ValidateBinaryArchitecture(data, normOS, normArch) {
+				return data, nil
+			}
 		}
 	}
 
