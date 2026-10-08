@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+
+      - name: Build cross-platform binaries
+        run: |
+          make all-platforms
+
+      - name: Package release archives
+        run: |
+          mkdir -p dist
+          TAG="${GITHUB_REF_NAME}"
+          for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            archive="dist/agy-sync-${target}.tar.gz"
+            tar -czvf "$archive" -C bin "agy-sync-${target}"
+          done
+
+          cd dist
+          sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
+          cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "agy-sync ${{ github.ref_name }}"
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt
