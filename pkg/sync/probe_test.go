@@ -109,4 +109,15 @@ func TestFilterActiveLRUSessions(t *testing.T) {
 	if len(activeAll) != 5 {
 		t.Fatalf("Expected all 5 sessions preserved, got %d", len(activeAll))
 	}
+
+	// Case 3: Boundary tie-breaker on identical mtime must strictly prefer local session
+	// Even if remote key is alphabetically larger ("z_remote" > "a_local"), "a_local" must win
+	// because it already resides locally, preventing boundary eviction thrashing.
+	tieKeys := map[string]bool{"a_local": true, "z_remote": true}
+	tieLoc := map[string][2]int64{"a_local": {1000, 100}}
+	tieRem := map[string][2]int64{"z_remote": {1000, 100}}
+	tieActive := filterActiveLRUSessions(tieKeys, tieLoc, tieRem, 1)
+	if len(tieActive) != 1 || !tieActive["a_local"] {
+		t.Fatalf("Expected local session 'a_local' to win identical mtime tie-breaker over 'z_remote', got %+v", tieActive)
+	}
 }

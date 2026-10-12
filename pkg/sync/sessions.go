@@ -301,7 +301,8 @@ except Exception:
 
 // filterActiveLRUSessions selects only the most recently active sessions up to maxLimit (default 500),
 // directly aligning with Antigravity CLI's internal local cache retention cap.
-// This prevents infinite thrashing loops where agy evicts sessions older than 500 and agy-sync pulls them back.
+// Crucially, when timestamps are tied (e.g. historical archive sessions sharing the same extract mtime),
+// local sessions are strictly preferred over remote-only sessions to prevent boundary eviction churn.
 func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[string][2]int64, maxLimit int) map[string]bool {
 	if len(allKeys) <= maxLimit || maxLimit <= 0 {
 		return allKeys
@@ -310,6 +311,7 @@ func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[st
 	type sessionRank struct {
 		key   string
 		mtime int64
+		inLoc bool
 	}
 	var ranks []sessionRank
 	for k := range allKeys {
@@ -320,12 +322,16 @@ func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[st
 		if rem, ok := remoteMap[k]; ok && rem[0] > mt {
 			mt = rem[0]
 		}
-		ranks = append(ranks, sessionRank{key: k, mtime: mt})
+		_, inLoc := localMap[k]
+		ranks = append(ranks, sessionRank{key: k, mtime: mt, inLoc: inLoc})
 	}
 
 	sort.Slice(ranks, func(i, j int) bool {
 		if ranks[i].mtime != ranks[j].mtime {
 			return ranks[i].mtime > ranks[j].mtime // newest first
+		}
+		if ranks[i].inLoc != ranks[j].inLoc {
+			return ranks[i].inLoc // prefer retaining local session to prevent boundary eviction churn
 		}
 		return ranks[i].key > ranks[j].key
 	})
@@ -337,7 +343,7 @@ func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[st
 	return active
 }
 
-func SyncConversationDBs(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedDBs map[string][2]int64, onProgress ...func(string)) (int, int) {
+func SyncConversationDBs(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedDBs map[string][2]int64, onProgress ...func(string)) (int, int, map[string]bool) {
 	_ = os.MkdirAll(config.ConvDir, 0755)
 	localDBs := make(map[string][2]int64)
 
@@ -369,7 +375,7 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 		statCmd := fmt.Sprintf("mkdir -p '%s' && (if stat -c '%%n' /dev/null >/dev/null 2>&1; then stat -c '%%n %%Y %%s' '%s'/*.db; else stat -f '%%N %%m %%z' '%s'/*.db; fi) 2>/dev/null", remConv, remConv, remConv)
 		stdout, _, exitCode, err := ssh.RunSSHCmd(host, port, statCmd, false)
 		if err != nil && exitCode == 255 {
-			return 0, 0
+			return 0, 0, nil
 		}
 
 		for _, line := range strings.Split(stdout, "\n") {
@@ -568,7 +574,7 @@ shutil.rmtree(td, ignore_errors=True)
 		}
 	}
 
-	return pushedCount, pulledCount
+	return pushedCount, pulledCount, activeKeys
 }
 
 func SyncAnnotations(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedAnns map[string]int64, onProgress ...func(string)) (int, int) {
@@ -746,7 +752,7 @@ func getSessionDirSize(dir string) int64 {
 	return total
 }
 
-func SyncBrainSessions(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedBrain map[string][2]int64, onProgress ...func(string)) (int, int) {
+func SyncBrainSessions(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedBrain map[string][2]int64, activeConvKeys map[string]bool, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.BrainDir, 0755)
 	localBrains := make(map[string][2]int64)
 
@@ -857,11 +863,26 @@ if os.path.isdir(b):
 		}
 	}
 
+	var allowedConvUUIDs map[string]bool
+	if activeConvKeys != nil {
+		allowedConvUUIDs = make(map[string]bool, len(activeConvKeys))
+		for k := range activeConvKeys {
+			uuid := strings.TrimSuffix(k, ".db")
+			allowedConvUUIDs[uuid] = true
+		}
+	}
+
 	allUUIDs := make(map[string]bool)
 	for k := range localBrains {
+		if allowedConvUUIDs != nil && !allowedConvUUIDs[k] {
+			continue // skip cold/orphaned brain sessions
+		}
 		allUUIDs[k] = true
 	}
 	for k := range remoteBrains {
+		if allowedConvUUIDs != nil && !allowedConvUUIDs[k] {
+			continue // skip cold/orphaned brain sessions
+		}
 		allUUIDs[k] = true
 	}
 	activeUUIDs := filterActiveLRUSessions(allUUIDs, localBrains, remoteBrains, config.MaxRetainedSessions)

@@ -49,7 +49,7 @@ var (
 )
 
 var (
-	Version   = "9.6"
+	Version   = "9.7"
 	GitCommit = "dev"
 )
 

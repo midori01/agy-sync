@@ -487,7 +487,8 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 6. Sync Conversation Databases
 	stepStatus("Conversation databases")
-	convPushed, convPulled = SyncConversationDBs(host, port, clockSkew, remHome, tracker, preprobedDBs, stepStatus)
+	var activeConvKeys map[string]bool
+	convPushed, convPulled, activeConvKeys = SyncConversationDBs(host, port, clockSkew, remHome, tracker, preprobedDBs, stepStatus)
 	convChanged := (convPushed > 0 || convPulled > 0)
 	convDesc := "identical"
 	if convChanged {
@@ -507,7 +508,7 @@ func SyncWithPeer(host string, port int, peerName string, verbose bool, isBatch 
 
 	// 8. Sync Brain Artifacts & Transcripts
 	stepStatus("Brain transcripts & artifacts")
-	brainPushed, brainPulled = SyncBrainSessions(host, port, clockSkew, remHome, tracker, preprobedBrain, stepStatus)
+	brainPushed, brainPulled = SyncBrainSessions(host, port, clockSkew, remHome, tracker, preprobedBrain, activeConvKeys, stepStatus)
 	brainChanged := (brainPushed > 0 || brainPulled > 0)
 	brainDesc := "identical"
 	if brainChanged {
