@@ -72,3 +72,41 @@ func TestGetFileHashCaching(t *testing.T) {
 		t.Fatalf("Hash did not update after file modification")
 	}
 }
+
+func TestFilterActiveLRUSessions(t *testing.T) {
+	allKeys := map[string]bool{
+		"sess1": true,
+		"sess2": true,
+		"sess3": true,
+		"sess4": true,
+		"sess5": true,
+	}
+	localMap := map[string][2]int64{
+		"sess1": {100, 10},
+		"sess2": {500, 10}, // #1
+		"sess3": {300, 10}, // #3
+	}
+	remoteMap := map[string][2]int64{
+		"sess3": {200, 10},
+		"sess4": {400, 10}, // #2
+		"sess5": {50, 10},  // #5
+	}
+
+	// Case 1: Limit 3 should keep sess2 (500), sess4 (400), sess3 (300)
+	active := filterActiveLRUSessions(allKeys, localMap, remoteMap, 3)
+	if len(active) != 3 {
+		t.Fatalf("Expected 3 active sessions, got %d", len(active))
+	}
+	if !active["sess2"] || !active["sess4"] || !active["sess3"] {
+		t.Fatalf("Expected top 3 sessions [sess2, sess4, sess3], got %+v", active)
+	}
+	if active["sess1"] || active["sess5"] {
+		t.Fatalf("Expected older sessions sess1 and sess5 to be excluded, got %+v", active)
+	}
+
+	// Case 2: Limit exceeds count -> all keys preserved
+	activeAll := filterActiveLRUSessions(allKeys, localMap, remoteMap, 10)
+	if len(activeAll) != 5 {
+		t.Fatalf("Expected all 5 sessions preserved, got %d", len(activeAll))
+	}
+}

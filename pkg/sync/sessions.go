@@ -299,6 +299,44 @@ except Exception:
 	return CopyFile(src, dst)
 }
 
+// filterActiveLRUSessions selects only the most recently active sessions up to maxLimit (default 500),
+// directly aligning with Antigravity CLI's internal local cache retention cap.
+// This prevents infinite thrashing loops where agy evicts sessions older than 500 and agy-sync pulls them back.
+func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[string][2]int64, maxLimit int) map[string]bool {
+	if len(allKeys) <= maxLimit || maxLimit <= 0 {
+		return allKeys
+	}
+
+	type sessionRank struct {
+		key   string
+		mtime int64
+	}
+	var ranks []sessionRank
+	for k := range allKeys {
+		var mt int64
+		if loc, ok := localMap[k]; ok && loc[0] > mt {
+			mt = loc[0]
+		}
+		if rem, ok := remoteMap[k]; ok && rem[0] > mt {
+			mt = rem[0]
+		}
+		ranks = append(ranks, sessionRank{key: k, mtime: mt})
+	}
+
+	sort.Slice(ranks, func(i, j int) bool {
+		if ranks[i].mtime != ranks[j].mtime {
+			return ranks[i].mtime > ranks[j].mtime // newest first
+		}
+		return ranks[i].key > ranks[j].key
+	})
+
+	active := make(map[string]bool, maxLimit)
+	for i := 0; i < maxLimit && i < len(ranks); i++ {
+		active[ranks[i].key] = true
+	}
+	return active
+}
+
 func SyncConversationDBs(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedDBs map[string][2]int64, onProgress ...func(string)) (int, int) {
 	_ = os.MkdirAll(config.ConvDir, 0755)
 	localDBs := make(map[string][2]int64)
@@ -355,9 +393,10 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 	for k := range remoteDBs {
 		allKeys[k] = true
 	}
+	activeKeys := filterActiveLRUSessions(allKeys, localDBs, remoteDBs, config.MaxRetainedSessions)
 
 	var toPush, toPull []string
-	for k := range allKeys {
+	for k := range activeKeys {
 		loc, inLoc := localDBs[k]
 		rem, inRem := remoteDBs[k]
 		if inLoc && !inRem {
@@ -825,9 +864,10 @@ if os.path.isdir(b):
 	for k := range remoteBrains {
 		allUUIDs[k] = true
 	}
+	activeUUIDs := filterActiveLRUSessions(allUUIDs, localBrains, remoteBrains, config.MaxRetainedSessions)
 
 	var toPush, toPull []string
-	for k := range allUUIDs {
+	for k := range activeUUIDs {
 		loc, inLoc := localBrains[k]
 		rem, inRem := remoteBrains[k]
 		if inLoc && !inRem {
