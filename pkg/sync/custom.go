@@ -130,7 +130,7 @@ func SyncCustomDirectory(relPath string, host string, port int, clockSkew float6
 
 	// 2. Scan remote files
 	remoteFiles := make(map[string][2]int64)
-	scanCmd := fmt.Sprintf("if [ -d '%s' ]; then if stat -c '%%n' /dev/null >/dev/null 2>&1; then find '%s' -type f -exec stat -c '%%n\t%%Y\t%%s' {} + 2>/dev/null; else find '%s' -type f -exec stat -f '%%N\t%%m\t%%z' {} + 2>/dev/null; fi; else echo NOT_DIR; fi", remDir, remDir, remDir)
+	scanCmd := fmt.Sprintf("if [ -d '%s' ]; then if stat -c '%%n' /dev/null >/dev/null 2>&1; then find '%s' -name .git -prune -o -type f -exec stat -c '%%n\t%%Y\t%%s' {} + 2>/dev/null; else find '%s' -name .git -prune -o -type f -exec stat -f '%%N\t%%m\t%%z' {} + 2>/dev/null; fi; else echo NOT_DIR; fi", remDir, remDir, remDir)
 	stdout, _, _, err := ssh.RunSSHCmd(host, port, scanCmd, false)
 	if err == nil && !strings.Contains(stdout, "NOT_DIR") {
 		for _, line := range strings.Split(stdout, "\n") {
@@ -150,6 +150,9 @@ func SyncCustomDirectory(relPath string, host string, port int, clockSkew float6
 				}
 				cleanSub := filepath.ToSlash(filepath.Clean(subRel))
 				if cleanSub != "." && !strings.HasPrefix(cleanSub, "..") && !filepath.IsAbs(cleanSub) {
+					if strings.HasPrefix(cleanSub, ".git/") || cleanSub == ".git" || strings.Contains(cleanSub, "/.git/") {
+						continue
+					}
 					baseName := filepath.Base(cleanSub)
 					if baseName == ".DS_Store" || baseName == "index.lock" || strings.HasSuffix(baseName, ".swp") || strings.Contains(baseName, ".tmp") {
 						continue

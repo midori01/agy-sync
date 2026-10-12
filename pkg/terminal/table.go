@@ -230,7 +230,7 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 		if termW == 74 {
 			nodeW = 6
 		}
-		colWidths = []int{nodeW, 9, 5, 9, 5, 5, 6, 4} // 74 or 75 cols
+		colWidths = []int{nodeW, 9, 5, 9, 6, 6, 6, 4} // 76 or 77 cols
 		headers = []string{"Node", "Route", "Ping", "Result", "DBs", "Arts", "Data", "Time"}
 		hasDataCol = true
 	}
@@ -260,6 +260,23 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 
 	var lines []string
 	lines = append(lines, top, headerRow, MakeTableDivider(colWidths))
+
+	formatCounter := func(pushed, pulled int, colW int) string {
+		if pushed == 0 && pulled == 0 {
+			return "ident"
+		}
+		s := fmt.Sprintf("+%d/+%d", pushed, pulled)
+		if len(s) > colW {
+			s = fmt.Sprintf("+%d/%d", pushed, pulled)
+		}
+		if len(s) > colW {
+			s = fmt.Sprintf("↑%d↓%d", pushed, pulled)
+		}
+		if len(s) > colW {
+			s = fmt.Sprintf("+%d", pushed+pulled)
+		}
+		return s
+	}
 
 	for _, res := range results {
 		pName := res.PeerName
@@ -296,28 +313,12 @@ func RenderClusterMatrix(results []*SyncResult, totalElapsed float64, successCnt
 
 		dbStr := "—"
 		if res.Success {
-			if res.DBPushed == 0 && res.DBPulled == 0 {
-				dbStr = "ident"
-			} else {
-				s := fmt.Sprintf("+%d/+%d", res.DBPushed, res.DBPulled)
-				if len(s) > 6 {
-					s = fmt.Sprintf("+%d/%d", res.DBPushed, res.DBPulled)
-				}
-				dbStr = s
-			}
+			dbStr = formatCounter(res.DBPushed, res.DBPulled, colWidths[4])
 		}
 
 		artStr := "—"
 		if res.Success {
-			if res.ArtPushed == 0 && res.ArtPulled == 0 {
-				artStr = "ident"
-			} else {
-				s := fmt.Sprintf("+%d/+%d", res.ArtPushed, res.ArtPulled)
-				if len(s) > 6 {
-					s = fmt.Sprintf("+%d/%d", res.ArtPushed, res.ArtPulled)
-				}
-				artStr = s
-			}
+			artStr = formatCounter(res.ArtPushed, res.ArtPulled, colWidths[5])
 		}
 
 		timeStr := fmt.Sprintf("%ds", int(res.Elapsed))
