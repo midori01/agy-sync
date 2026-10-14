@@ -1242,7 +1242,7 @@ func ForcePushPoolEngine(targetAlias string) {
 			}
 
 			p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=.git", "--exclude=__pycache__", "--exclude=*.pyc", "--exclude=.DS_Store", "-czf", "-", "agy-pool")
-			sshArgs := ssh.GetSSHCmd(effH, effP, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
+			sshArgs := ssh.GetStreamSSHCmd(effH, effP, fmt.Sprintf("tar -C '%s' --no-same-owner -xzf - 2>/dev/null", remHome), true)
 			p2 := exec.Command("ssh", sshArgs...)
 			_, err = RunPipedCommandsWithBytes(p1, p2)
 			if err == nil {

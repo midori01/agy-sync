@@ -452,7 +452,7 @@ fi
 		spinRepo.Start()
 
 		p1 := exec.Command("tar", "-C", config.HomeDir, "--exclude=bin", "--exclude=*.tmp*", "--exclude=.git/index.lock", "-czf", "-", "agy-sync")
-		p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, "tar -C ~ --no-same-owner -xzf - 2>/dev/null && git -C ~/agy-sync checkout . 2>/dev/null", true)...)
+		p2 := exec.Command("ssh", ssh.GetStreamSSHCmd(sshTarget, port, "tar -C ~ --no-same-owner -xzf - 2>/dev/null && git -C ~/agy-sync checkout . 2>/dev/null", true)...)
 		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
 			pct := 0.0
 			if repoSz > 0 {
@@ -483,7 +483,7 @@ if [ -f ~/agy-pool/install.sh ]; then
     bash ~/agy-pool/install.sh >/dev/null 2>&1 || true
 fi
 `
-			p2 := exec.Command("ssh", ssh.GetSSHCmd(sshTarget, port, poolSetup, true)...)
+			p2 := exec.Command("ssh", ssh.GetStreamSSHCmd(sshTarget, port, poolSetup, true)...)
 			nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
 				pct := 0.0
 				if poolSz > 0 {

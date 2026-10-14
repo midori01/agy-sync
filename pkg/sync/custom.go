@@ -216,7 +216,7 @@ func SyncCustomDirectory(relPath string, host string, port int, clockSkew float6
 		p1 := exec.Command("tar", "-C", locDir, "-czf", "-", "-T", "-")
 		p1.Stdin = strings.NewReader(inputList)
 
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remDir, remDir), true)
+		sshArgs := ssh.GetStreamSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remDir, remDir), true)
 		p2 := exec.Command("ssh", sshArgs...)
 
 		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
@@ -243,7 +243,7 @@ func SyncCustomDirectory(relPath string, host string, port int, clockSkew float6
 	if len(toPull) > 0 {
 		reportProgress(fmt.Sprintf("Custom ~/%s ↓ [%s/%s (0%%)]", relPath, terminal.FormatBytes(0, true), terminal.FormatBytes(totalPullBytes, true)))
 		inputList := strings.Join(toPull, "\n") + "\n"
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -czf - -T -", remDir), true)
+		sshArgs := ssh.GetStreamSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -czf - -T -", remDir), true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 

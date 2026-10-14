@@ -546,6 +546,13 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 		} else if inRem && !inLoc {
 			toPull = append(toPull, k)
 		} else {
+			// For SQLite conversation databases, any added turns/messages alter file size.
+			// If file sizes are strictly identical, they contain the exact same page allocations.
+			// Filesystem mtimes drift naturally due to tar extractions, WAL checkpoints, or local
+			// timestamp alignments; re-downloading gigabytes of identical databases is avoided.
+			if loc[1] == rem[1] {
+				continue
+			}
 			cmp := CompareFileParity(loc[0], loc[1], rem[0], rem[1], clockSkew)
 			if cmp > 0 {
 				toPush = append(toPush, k)
@@ -602,7 +609,7 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 				remoteCmd := fmt.Sprintf("%s mkdir -p '%s' && (tar --no-same-owner --warning=no-timestamp -C '%s' -xzf - 2>/dev/null || tar -C '%s' --no-same-owner -xzf - 2>/dev/null) && rm -f %s 2>/dev/null || true",
 					config.PathPrefix, remConv, remConv, remConv, cleanCmd)
 
-				sshArgs := ssh.GetSSHCmd(host, port, remoteCmd, true)
+				sshArgs := ssh.GetStreamSSHCmd(host, port, remoteCmd, true)
 				p2 := exec.Command("ssh", sshArgs...)
 
 				reportProgress(fmt.Sprintf("Conv DBs ↑ [%s/%s (0%%)]", terminal.FormatBytes(0, true), terminal.FormatBytes(totalPushBytes, true)))
@@ -660,7 +667,7 @@ shutil.rmtree(td, ignore_errors=True)
 		b64Code := base64.StdEncoding.EncodeToString([]byte(remotePullPy))
 		remoteCmd := fmt.Sprintf(`%s python3 -c "import base64; exec(base64.b64decode('%s').decode())"`, config.PathPrefix, b64Code)
 
-		sshArgs := ssh.GetSSHCmd(host, port, remoteCmd, true)
+		sshArgs := ssh.GetStreamSSHCmd(host, port, remoteCmd, true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(strings.Join(toPull, "\n") + "\n")
 
@@ -692,7 +699,7 @@ shutil.rmtree(td, ignore_errors=True)
 		} else {
 			// Fallback: direct tar stream if remote lacks python3
 			inputList := strings.Join(toPull, "\n") + "\n"
-			fbArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -czf - -T -", remConv), true)
+			fbArgs := ssh.GetStreamSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -czf - -T -", remConv), true)
 			fb1 := exec.Command("ssh", fbArgs...)
 			fb1.Stdin = strings.NewReader(inputList)
 			fb2 := exec.Command("tar", "-C", config.ConvDir, "--no-same-owner", "-xzf", "-")
@@ -801,7 +808,7 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string, t
 		p1 := exec.Command("tar", "-C", config.AnnDir, "-czf", "-", "-T", "-")
 		p1.Stdin = strings.NewReader(inputList)
 
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remAnn, remAnn), true)
+		sshArgs := ssh.GetStreamSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remAnn, remAnn), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		nBytes, err := RunPipedCommandsWithBytes(p1, p2)
 		if err == nil {
@@ -815,7 +822,7 @@ func SyncAnnotations(host string, port int, clockSkew float64, remHome string, t
 	pulled := 0
 	if len(toPull) > 0 {
 		inputList := strings.Join(toPull, "\n") + "\n"
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -czf - -T -", remAnn), true)
+		sshArgs := ssh.GetStreamSSHCmd(host, port, fmt.Sprintf("tar -C '%s' -czf - -T -", remAnn), true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
@@ -1036,6 +1043,10 @@ if os.path.isdir(b):
 		} else if inRem && !inLoc {
 			toPull = append(toPull, k)
 		} else {
+			// For brain session transcripts, identical byte length indicates identical transcript steps.
+			if loc[1] == rem[1] && loc[1] > 0 {
+				continue
+			}
 			cmp := CompareFileParity(loc[0], loc[1], rem[0], rem[1], clockSkew)
 			if cmp > 0 {
 				toPush = append(toPush, k)
@@ -1104,7 +1115,7 @@ if os.path.isdir(b):
 		p1 := exec.Command("tar", tarArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 
-		sshArgs := ssh.GetSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remBrain, remBrain), true)
+		sshArgs := ssh.GetStreamSSHCmd(host, port, fmt.Sprintf("mkdir -p '%s' && tar -C '%s' --no-same-owner -xzf -", remBrain, remBrain), true)
 		p2 := exec.Command("ssh", sshArgs...)
 		nBytes, err := RunPipedCommandsWithBytes(p1, p2, func(cur int64) {
 			pct := 0.0
@@ -1161,7 +1172,7 @@ if os.path.isdir(b):
 				"-C '%s' -czf - -T -",
 			remBrain,
 		)
-		sshArgs := ssh.GetSSHCmd(host, port, remTarCmd, true)
+		sshArgs := ssh.GetStreamSSHCmd(host, port, remTarCmd, true)
 		p1 := exec.Command("ssh", sshArgs...)
 		p1.Stdin = strings.NewReader(inputList)
 

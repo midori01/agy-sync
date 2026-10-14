@@ -56,6 +56,40 @@ func GetSSHCmd(host string, port int, cmd string, batch bool, connectTimeout ...
 	return args
 }
 
+// GetStreamSSHCmd constructs SSH command arguments specifically for piped binary streaming (tar, files).
+// It explicitly sets ControlMaster=no to bypass OpenSSH multiplexer daemon fd duplication (SCM_RIGHTS),
+// preventing pipe EOF deadlocks when a ControlMaster socket is active.
+func GetStreamSSHCmd(host string, port int, cmd string, batch bool, connectTimeout ...int) []string {
+	to := 15
+	if len(connectTimeout) > 0 && connectTimeout[0] > 0 {
+		to = connectTimeout[0]
+	}
+
+	args := []string{
+		"-p", strconv.Itoa(port),
+		"-o", fmt.Sprintf("ConnectTimeout=%d", to),
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "LogLevel=ERROR",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
+		"-o", "TCPKeepAlive=yes",
+		"-o", "ControlMaster=no",
+		"-o", "Ciphers=aes128-gcm@openssh.com,aes256-gcm@openssh.com,chacha20-poly1305@openssh.com",
+	}
+
+	if batch {
+		args = append(args, "-o", "BatchMode=yes")
+	}
+
+	args = append(args, host)
+	if cmd != "" {
+		args = append(args, cmd)
+	}
+
+	return args
+}
+
 func RunSSHCmd(host string, port int, cmd string, check bool, connectTimeout ...int) (stdout, stderr string, exitCode int, err error) {
 	sshArgs := GetSSHCmd(host, port, cmd, true, connectTimeout...)
 	proc := exec.Command("ssh", sshArgs...)
