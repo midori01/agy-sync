@@ -110,14 +110,21 @@ func TestFilterActiveLRUSessions(t *testing.T) {
 		t.Fatalf("Expected all 5 sessions preserved, got %d", len(activeAll))
 	}
 
-	// Case 3: Boundary tie-breaker on identical mtime must strictly prefer local session
-	// Even if remote key is alphabetically larger ("z_remote" > "a_local"), "a_local" must win
-	// because it already resides locally, preventing boundary eviction thrashing.
-	tieKeys := map[string]bool{"a_local": true, "z_remote": true}
-	tieLoc := map[string][2]int64{"a_local": {1000, 100}}
-	tieRem := map[string][2]int64{"z_remote": {1000, 100}}
-	tieActive := filterActiveLRUSessions(tieKeys, tieLoc, tieRem, 1)
-	if len(tieActive) != 1 || !tieActive["a_local"] {
-		t.Fatalf("Expected local session 'a_local' to win identical mtime tie-breaker over 'z_remote', got %+v", tieActive)
+	// Case 3: Commutative deterministic tie-breaker on identical mtime
+	// When mtimes are identical, sorting by key (descending) must be strictly identical regardless of
+	// which device executes the sync (localMap vs remoteMap inverted).
+	tieKeys := map[string]bool{"a_sess": true, "z_sess": true}
+	tieLoc := map[string][2]int64{"a_sess": {1000, 100}}
+	tieRem := map[string][2]int64{"z_sess": {1000, 100}}
+	// Perspective from Device A (local=tieLoc, remote=tieRem):
+	activeA := filterActiveLRUSessions(tieKeys, tieLoc, tieRem, 1)
+	// Perspective from Device B (local=tieRem, remote=tieLoc):
+	activeB := filterActiveLRUSessions(tieKeys, tieRem, tieLoc, 1)
+
+	if len(activeA) != 1 || !activeA["z_sess"] {
+		t.Fatalf("Expected deterministic winner 'z_sess' for Device A, got %+v", activeA)
+	}
+	if len(activeB) != 1 || !activeB["z_sess"] {
+		t.Fatalf("Expected deterministic winner 'z_sess' for Device B, got %+v", activeB)
 	}
 }

@@ -301,8 +301,9 @@ except Exception:
 
 // filterActiveLRUSessions selects only the most recently active sessions up to maxLimit (default 500),
 // directly aligning with Antigravity CLI's internal local cache retention cap.
-// Crucially, when timestamps are tied (e.g. historical archive sessions sharing the same extract mtime),
-// local sessions are strictly preferred over remote-only sessions to prevent boundary eviction churn.
+// When timestamps are tied (e.g. historical archive sessions sharing the same extract mtime),
+// sorting by session UUID key (descending) provides a 100% deterministic, global, perspective-free
+// selection across all cluster nodes, ensuring perfect mathematical symmetry (Sync(A,B) == Sync(B,A)).
 func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[string][2]int64, maxLimit int) map[string]bool {
 	if len(allKeys) <= maxLimit || maxLimit <= 0 {
 		return allKeys
@@ -311,7 +312,6 @@ func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[st
 	type sessionRank struct {
 		key   string
 		mtime int64
-		inLoc bool
 	}
 	var ranks []sessionRank
 	for k := range allKeys {
@@ -322,18 +322,14 @@ func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[st
 		if rem, ok := remoteMap[k]; ok && rem[0] > mt {
 			mt = rem[0]
 		}
-		_, inLoc := localMap[k]
-		ranks = append(ranks, sessionRank{key: k, mtime: mt, inLoc: inLoc})
+		ranks = append(ranks, sessionRank{key: k, mtime: mt})
 	}
 
 	sort.Slice(ranks, func(i, j int) bool {
 		if ranks[i].mtime != ranks[j].mtime {
 			return ranks[i].mtime > ranks[j].mtime // newest first
 		}
-		if ranks[i].inLoc != ranks[j].inLoc {
-			return ranks[i].inLoc // prefer retaining local session to prevent boundary eviction churn
-		}
-		return ranks[i].key > ranks[j].key
+		return ranks[i].key > ranks[j].key // deterministic global order across all devices
 	})
 
 	active := make(map[string]bool, maxLimit)
