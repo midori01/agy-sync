@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"math"
@@ -10,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	stdsync "sync"
+	"time"
 
 	"agy-sync/pkg/config"
 	"agy-sync/pkg/ssh"
@@ -95,6 +98,7 @@ from datetime import datetime, timezone
 local_db = '%s'
 rem_db = '%s'
 clock_skew = %f
+path_prefix = '%s'
 
 def get_snapshot(db_path):
     if not os.path.isfile(db_path):
@@ -139,7 +143,7 @@ tmp_remote = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
 tmp_remote.close()
 
 remote_snap_cmd = (
-    f"{config.PathPrefix} python3 -c \"import sqlite3, tempfile, sys, os; "
+    f"{path_prefix} python3 -c \"import sqlite3, tempfile, sys, os; "
     f"p = '{rem_db}'; "
     f"tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False); "
     f"tmp.close(); "
@@ -254,13 +258,16 @@ elif remote_changed:
     print(f"pushed ({len(merged_rows)} sessions)")
 else:
     print(f"identical ({len(merged_rows)} sessions)")
-`, config.SummariesDBFile, remDB, clockSkew, port, config.SocketDir, host, port, config.SocketDir, host)
+`, config.SummariesDBFile, remDB, clockSkew, config.PathPrefix, port, config.SocketDir, host, port, config.SocketDir, host)
 
 	cmd := exec.Command("python3", "-c", pyMergeScript)
-	out, err := cmd.Output()
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	err = cmd.Run()
 	resStr := "synced"
-	if err == nil && len(out) > 0 {
-		resStr = strings.TrimSpace(string(out))
+	if err == nil && stdoutBuf.Len() > 0 {
+		resStr = strings.TrimSpace(stdoutBuf.String())
 	}
 	if len(tracker) > 0 && tracker[0] != nil {
 		if fi, err := os.Stat(config.SummariesDBFile); err == nil && fi.Size() > 0 {
@@ -274,7 +281,105 @@ else:
 			}
 		}
 	}
+	if resStr != "identical" {
+		InvalidateSummaryMtimes()
+	}
 	return resStr
+}
+
+var (
+	cachedSummaryMtimes map[string]float64
+	summaryMtimesLock   stdsync.Mutex
+)
+
+// InvalidateSummaryMtimes clears the cached conversation summary timestamps.
+func InvalidateSummaryMtimes() {
+	summaryMtimesLock.Lock()
+	cachedSummaryMtimes = nil
+	summaryMtimesLock.Unlock()
+}
+
+// LoadSummaryMtimes reads conversation_summaries.db and returns a map of
+// conversation_id -> last_modified_time as unix epoch timestamps.
+func LoadSummaryMtimes() map[string]float64 {
+	summaryMtimesLock.Lock()
+	defer summaryMtimesLock.Unlock()
+	if cachedSummaryMtimes != nil {
+		return cachedSummaryMtimes
+	}
+
+	m := make(map[string]float64)
+	if _, err := os.Stat(config.SummariesDBFile); err != nil {
+		return m
+	}
+
+	pyScript := fmt.Sprintf(`import sqlite3, os, sys
+from datetime import datetime
+p = '%s'
+if os.path.isfile(p):
+    try:
+        src = sqlite3.connect(f'file:{p}?mode=ro', uri=True)
+        cur = src.cursor()
+        cur.execute('SELECT conversation_id, last_modified_time FROM conversation_summaries')
+        for cid, ts in cur.fetchall():
+            if ts:
+                try:
+                    t = datetime.fromisoformat(str(ts).strip().replace('Z', '+00:00')).timestamp()
+                    if t > 0:
+                        sys.stdout.write(f'{cid}\t{t:.3f}\n')
+                except Exception:
+                    pass
+        src.close()
+    except Exception:
+        pass
+`, config.SummariesDBFile)
+
+	cmd := exec.Command("python3", "-c", pyScript)
+	out, err := cmd.Output()
+	if err == nil && len(out) > 0 {
+		for _, line := range strings.Split(string(out), "\n") {
+			parts := strings.Split(line, "\t")
+			if len(parts) == 2 {
+				cid := strings.TrimSpace(parts[0])
+				if t, err := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64); err == nil {
+					m[cid] = t
+				}
+			}
+		}
+	}
+	cachedSummaryMtimes = m
+	return m
+}
+
+// AlignLocalConversationMtimes ensures that local .db files in conversations/ have filesystem mtimes
+// strictly matching their authoritative last_modified_time from conversation_summaries.db.
+// This repairs tied mtimes (e.g. from bulk tar extractions) and ensures both Antigravity CLI's
+// local eviction manager and agy-sync evaluate the exact same deterministic chronological order.
+func AlignLocalConversationMtimes(summaryMtimes map[string]float64) {
+	if len(summaryMtimes) == 0 {
+		return
+	}
+	entries, err := os.ReadDir(config.ConvDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".db") {
+			continue
+		}
+		uuid := strings.TrimSuffix(e.Name(), ".db")
+		if ts, ok := summaryMtimes[uuid]; ok && ts > 0 {
+			fPath := filepath.Join(config.ConvDir, e.Name())
+			if fi, err := e.Info(); err == nil {
+				curSec := fi.ModTime().Unix()
+				targetSec := int64(ts)
+				if curSec != targetSec {
+					targetTime := time.Unix(targetSec, 0)
+					_ = os.Chtimes(fPath, targetTime, targetTime)
+				}
+			}
+		}
+	}
 }
 
 func SafeDBSnapshot(src, dst string) error {
@@ -301,33 +406,51 @@ except Exception:
 
 // filterActiveLRUSessions selects only the most recently active sessions up to maxLimit (default 500),
 // directly aligning with Antigravity CLI's internal local cache retention cap.
-// When timestamps are tied (e.g. historical archive sessions sharing the same extract mtime),
-// sorting by session UUID key (descending) provides a 100% deterministic, global, perspective-free
-// selection across all cluster nodes, ensuring perfect mathematical symmetry (Sync(A,B) == Sync(B,A)).
-func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[string][2]int64, maxLimit int) map[string]bool {
-	if len(allKeys) <= maxLimit || maxLimit <= 0 {
+// Chronological precedence is strictly determined by:
+// 1. Authoritative conversation_summaries.db last_modified_time (ISO timestamps)
+// 2. Fallback to filesystem mtime when summary record is unavailable (e.g. newly created session)
+// 3. When timestamps are tied (e.g. historical archive sessions sharing the same extract mtime),
+//    sorting by session UUID key (descending) provides a 100% deterministic, global, perspective-free
+//    selection across all cluster nodes, ensuring perfect mathematical symmetry (Sync(A,B) == Sync(B,A)).
+func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[string][2]int64, maxLimit int, summaryMtimes ...map[string]float64) map[string]bool {
+	if maxLimit <= 0 || len(allKeys) <= maxLimit {
 		return allKeys
 	}
 
+	var sumTimes map[string]float64
+	if len(summaryMtimes) > 0 && summaryMtimes[0] != nil {
+		sumTimes = summaryMtimes[0]
+	}
+
 	type sessionRank struct {
-		key   string
-		mtime int64
+		key  string
+		time float64
 	}
 	var ranks []sessionRank
 	for k := range allKeys {
-		var mt int64
-		if loc, ok := localMap[k]; ok && loc[0] > mt {
-			mt = loc[0]
+		uuid := strings.TrimSuffix(k, ".db")
+		var effectiveTime float64
+		if sumTimes != nil {
+			if st, ok := sumTimes[uuid]; ok {
+				effectiveTime = st
+			}
 		}
-		if rem, ok := remoteMap[k]; ok && rem[0] > mt {
-			mt = rem[0]
+		if effectiveTime == 0 {
+			var mt int64
+			if loc, ok := localMap[k]; ok && loc[0] > mt {
+				mt = loc[0]
+			}
+			if rem, ok := remoteMap[k]; ok && rem[0] > mt {
+				mt = rem[0]
+			}
+			effectiveTime = float64(mt)
 		}
-		ranks = append(ranks, sessionRank{key: k, mtime: mt})
+		ranks = append(ranks, sessionRank{key: k, time: effectiveTime})
 	}
 
 	sort.Slice(ranks, func(i, j int) bool {
-		if ranks[i].mtime != ranks[j].mtime {
-			return ranks[i].mtime > ranks[j].mtime // newest first
+		if ranks[i].time != ranks[j].time {
+			return ranks[i].time > ranks[j].time // newest first
 		}
 		return ranks[i].key > ranks[j].key // deterministic global order across all devices
 	})
@@ -341,6 +464,8 @@ func filterActiveLRUSessions(allKeys map[string]bool, localMap, remoteMap map[st
 
 func SyncConversationDBs(host string, port int, clockSkew float64, remHome string, tracker *ByteTracker, preprobedDBs map[string][2]int64, onProgress ...func(string)) (int, int, map[string]bool) {
 	_ = os.MkdirAll(config.ConvDir, 0755)
+	sumTimes := LoadSummaryMtimes()
+	AlignLocalConversationMtimes(sumTimes)
 	localDBs := make(map[string][2]int64)
 
 	reportProgress := func(msg string) {
@@ -395,7 +520,22 @@ func SyncConversationDBs(host string, port int, clockSkew float64, remHome strin
 	for k := range remoteDBs {
 		allKeys[k] = true
 	}
-	activeKeys := filterActiveLRUSessions(allKeys, localDBs, remoteDBs, config.MaxRetainedSessions)
+	activeKeys := filterActiveLRUSessions(allKeys, localDBs, remoteDBs, config.MaxRetainedSessions, sumTimes)
+
+	// Clean up local cold sessions exceeding MaxRetainedSessions to maintain
+	// perfect synchronization parity with Antigravity CLI's 500-session retention cap.
+	if len(localDBs) > config.MaxRetainedSessions && len(activeKeys) > 0 {
+		for k := range localDBs {
+			if !activeKeys[k] {
+				_ = os.Remove(filepath.Join(config.ConvDir, k))
+				_ = os.Remove(filepath.Join(config.ConvDir, k+"-wal"))
+				_ = os.Remove(filepath.Join(config.ConvDir, k+"-shm"))
+				delete(localDBs, k)
+				uuid := strings.TrimSuffix(k, ".db")
+				_ = os.RemoveAll(filepath.Join(config.BrainDir, uuid))
+			}
+		}
+	}
 
 	var toPush, toPull []string
 	for k := range activeKeys {
@@ -568,6 +708,10 @@ shutil.rmtree(td, ignore_errors=True)
 				}
 			}
 		}
+	}
+
+	if pulledCount > 0 {
+		AlignLocalConversationMtimes(sumTimes)
 	}
 
 	return pushedCount, pulledCount, activeKeys
@@ -881,7 +1025,7 @@ if os.path.isdir(b):
 		}
 		allUUIDs[k] = true
 	}
-	activeUUIDs := filterActiveLRUSessions(allUUIDs, localBrains, remoteBrains, config.MaxRetainedSessions)
+	activeUUIDs := filterActiveLRUSessions(allUUIDs, localBrains, remoteBrains, config.MaxRetainedSessions, LoadSummaryMtimes())
 
 	var toPush, toPull []string
 	for k := range activeUUIDs {

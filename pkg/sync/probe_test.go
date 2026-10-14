@@ -127,4 +127,19 @@ func TestFilterActiveLRUSessions(t *testing.T) {
 	if len(activeB) != 1 || !activeB["z_sess"] {
 		t.Fatalf("Expected deterministic winner 'z_sess' for Device B, got %+v", activeB)
 	}
+
+	// Case 4: Authoritative summaryMtimes precedence over file mtime
+	// When file mtimes are tied (e.g. tar extract 1790202008), summaryMtimes takes precedence.
+	// Even though "z_older" is lexicographically larger, "a_recent" wins due to its newer summary timestamp.
+	sumMtimes := map[string]float64{
+		"a_recent": 1790250000.0,
+		"z_older":  1780000000.0,
+	}
+	precKeys := map[string]bool{"a_recent": true, "z_older": true}
+	precLoc := map[string][2]int64{"a_recent": {1790202008, 100}, "z_older": {1790202008, 100}}
+	precRem := map[string][2]int64{"a_recent": {1790202008, 100}, "z_older": {1790202008, 100}}
+	activePrec := filterActiveLRUSessions(precKeys, precLoc, precRem, 1, sumMtimes)
+	if len(activePrec) != 1 || !activePrec["a_recent"] {
+		t.Fatalf("Expected a_recent to win based on summaryMtimes, got %+v", activePrec)
+	}
 }
