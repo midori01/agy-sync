@@ -49,12 +49,12 @@ var (
 )
 
 var (
-	Version   = "9.8"
+	Version   = "9.9"
 	GitCommit = "dev"
 )
 
 const (
-	MaxRetainedSessions   = 500
+	MaxRetainedSessions   = 1000
 	SSHConfigMarkerStart  = "# >>> agy-sync cluster devices >>>"
 	SSHConfigMarkerEnd    = "# <<< agy-sync cluster devices <<<"
 	ShellPeerMarkerStart  = "# >>> agy-sync ssh peer integration >>>"
